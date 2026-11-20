@@ -149,25 +149,25 @@ class PhaseTwoContractTest(HeadlessTest):
         draft = self.run_game(1801, {**scenario, "wind_enabled": False}, every=1800, night=3)
         self.assertFalse(self.snapshots(draft)[-1]["wind"]["active"])
 
-    def test_v11_validation_and_unknown_lantern_for_night(self):
+    def test_inherited_validation_and_unknown_lantern_for_night(self):
         for setup in ({"player": {"charm_ticks": -1}}, {"drifters": [{"pos": [0, 0, 0], "state": "wrong"}]},
                       {"lanterns": [{"id": "L7"}]}, {"wind_enabled": 1}):
             self.run_game(1, setup, expected=2, night=2)
         self.run_game(1, NO_RANDOM, [{"tick": 0, "pause": 1}], expected=2)
         self.run_game(1, {"lanterns": [{"id": "L7", "lit": True}]}, night=3)
 
-    def test_each_night_can_finish_and_scores_only_deposited_motes(self):
+    def test_each_night_can_finish_at_dawn_and_scores_only_deposited_motes(self):
         for night, layout in LAYOUTS.items():
             with self.subTest(night=night):
                 cost = TUNING["lantern_cost"]
                 pos = list(layout.lanterns[0])
-                scenario = {**NO_RANDOM, "time_left_s": 20,
+                scenario = {**NO_RANDOM, "time_left_s": 2 / HZ,
                             "player": {"pos": pos, "carried": cost - 1}, "motes": [pos],
                             "lanterns": [{"id": "L" + str(i), "lit": True}
                                          for i in range(2, len(layout.lanterns) + 1)]}
                 records = self.run_game(60, scenario, [{"tick": 0, "interact": True}], night=night)
-                score = cost * 10 + 100 + 19 * 2 + TUNING["flames"] * 50
-                self.assertEqual(records[-1], {"type": "end", "ticks": 1, "state": "won", "score": score})
+                score = cost * 5 + 100 + len(layout.lanterns) * 149 + TUNING["flames"] * 50
+                self.assertEqual(records[-1], {"type": "end", "ticks": 2, "state": "won", "score": score})
 
     def test_air_dash_holds_height_for_twelve_ticks_and_sets_90_tick_cooldown(self):
         frames = [{"tick": 0, "jump": True}, {"tick": 6, "dash": True}]
@@ -216,9 +216,9 @@ class PhaseTwoContractTest(HeadlessTest):
         win = self.run_game(1, {**NO_RANDOM, "time_left_s": 1 / HZ, "lanterns": lamps})
         self.assertEqual(win[-1]["state"], "won")
         no_flames = self.run_game(1, {**NO_RANDOM, "time_left_s": 1 / HZ, "lanterns": lamps, "player": {"flames": 0}})
-        self.assertEqual(self.events(no_flames, "game_lost")[0]["data"]["reason"], "no_flames")
+        self.assertEqual(self.events(no_flames, "game_over")[0]["data"]["reason"], "no_flames")
         dawn = self.run_game(1, {**NO_RANDOM, "time_left_s": 1 / HZ})
-        self.assertEqual(self.events(dawn, "game_lost")[0]["data"]["reason"], "dawn")
+        self.assertEqual(self.events(dawn, "game_over")[0]["data"]["reason"], "dawn")
 
     def test_shade_detection_hysteresis_and_night_three_speed(self):
         scenario = {**NO_RANDOM, "player": {"pos": [0, 0, -20]}, "shades": [

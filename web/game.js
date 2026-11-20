@@ -4,7 +4,7 @@ const canvas = document.querySelector("#island");
 const ctx = canvas.getContext("2d");
 const fields = Object.fromEntries(["flames", "motes", "lamps", "time", "score", "notice", "curtain", "title",
     "description", "hud", "actions", "eyebrow", "settings", "volume", "sensitivity", "night-label",
-    "dash-cd", "pulse-cd", "wind", "charm-timer", "benchmark", "controls"]
+    "dash-cd", "pulse-cd", "wind", "charm-timer", "benchmark", "controls", "accessiblePalette", "carry-count", "dawn-goal"]
     .map(id => [id, document.getElementById(id)]));
 
 const STEP = 1000 / 60;
@@ -30,14 +30,15 @@ let facing = 0;
 let viewport = {width: 900, height: 600};
 let night = 1, screen = "menu", settingsBack = "menu", windWarning = false, previousSecond = Infinity;
 let totalScore = 0;
+let lowFuel = new Set(), receivingLanterns = new Set(), requiredLights = 0;
 const nights = [
-    {name: "Đảo Bến", quote: "Đom đóm vẫn nhớ đường về. Con hãy mang chúng tới năm ngọn đèn."},
+    {name: "Đảo Bến", quote: "Khi dầu cạn, đèn sẽ tắt. Châm dầu hoặc thắp lại để giữ đảo sáng tới bình minh."},
     {name: "Đảo Sương", quote: "Cầu tre nối hai bờ. Nếu gặp Gió Lạc, hãy giữ ánh sáng thật gần."},
     {name: "Đảo Chuông", quote: "Theo dốc lên triền cao. Khi gió lặng, hãy thắp đèn cạnh tháp chuông."}
 ];
 const lanternPlaces = [[0, 25], [23.8, 7.7], [14.7, -20.2], [-14.7, -20.2], [-23.8, 7.7]];
 const preview = {player: {pos: [0, 0, 0]}, lanterns: lanternPlaces.map(([x, z], i) => ({
-    id: "L" + (i + 1), pos: [x, 0, z], lit: i === 0, deposited: 0
+    id: "L" + (i + 1), pos: [x, 0, z], lit: i === 0, deposited: 0, fuel: i === 0 ? 100 : 0
 })), shades: [], motes: [], drifters: [], charms: [], wind: {active: false}};
 
 const plants = Array.from({length: 44}, (_, i) => {
@@ -237,19 +238,41 @@ function drawPlant(cam, plant) {
     }
 }
 
-function drawLamp(cam, lamp) {
+function flicker(lamp, now) {
+    return lowFuel.has(lamp.id) ? .48 + .52 * (.5 + .5 * Math.cos(now * TAU / 1000)) : 1;
+}
+
+function drawLamp(cam, lamp, now) {
     const [x, y, z] = lamp.pos;
-    const at = cam.project([x, y + 2.7, z]);
+    const paperHeight = lamp.lit ? .70 : .70 * .8;
+    const at = cam.project([x, y + 2.56 + paperHeight * .50, z]);
     frustum(cam, lamp.pos, 0.82, 0.63, 0.24, ["#566175", "#71778a", "#43495e"], 6);
     frustum(cam, [x, y + 0.24, z], 0.21, 0.13, 2.0, [palette.wood, "#745033"], 6);
     frustum(cam, [x, y + 2.2, z], 0.60, 0.84, 0.37, ["#775052", "#b48260"], 6);
-    frustum(cam, [x, y + 2.56, z], 0.76, 0.68, 0.70,
+    ctx.save();
+    ctx.globalAlpha *= flicker(lamp, now);
+    frustum(cam, [x, y + 2.56, z], 0.76, 0.68, paperHeight,
         lamp.lit ? [palette.lamp, "#f4a741", palette.lamp] : [palette.lampOff, "#606473", palette.lampOff], 6);
-    frustum(cam, [x, y + 3.26, z], 0.89, 0.18, 0.45, ["#733e50", "#ac6562", "#844757"], 6);
+    frustum(cam, [x, y + 2.56 + paperHeight, z], 0.89, 0.18, 0.45, ["#733e50", "#ac6562", "#844757"], 6);
     if (at && lamp.lit) {
         glow(at[0], at[1], at[2] * 2.9, palette.lamp + "8c", palette.lamp + "00");
         dot(at[0], at[1], Math.max(1, at[2] * .11), palette.lampCore);
+        const gauge = cam.project([x, y + 4.1, z]);
+        if (gauge) {
+            const [sx, sy, scale] = gauge, width = Math.min(112, Math.max(26, scale * 1.9));
+            const ratio = Math.min(1, Math.max(0, lamp.fuel / (tuning?.fuel_max ?? 100)));
+            ctx.fillStyle = palette.shade;
+            ctx.fillRect(sx - width / 2 - 2, sy - 2, width + 4, 9);
+            ctx.fillStyle = lowFuel.has(lamp.id) && settings.accessiblePalette ? "#FFFFFF" : palette.gold;
+            ctx.fillRect(sx - width / 2, sy, width * ratio, 5);
+        }
+    } else if (at) {
+        const [sx, sy, scale] = at;
+        const torn = (dx, dy) => [sx + dx * scale, sy + dy * scale];
+        polygon([torn(-.24, -.16), torn(.05, -.09), torn(-.03, .01),
+            torn(.19, .15), torn(-.10, .08), torn(-.05, -.01)], palette.shade);
     }
+    ctx.restore();
 }
 
 function drawMote(cam, mote, now) {
@@ -268,17 +291,17 @@ function drawShade(cam, shade, now) {
     if (!at) return;
     const [sx, sy, scale] = at, r = Math.max(3, scale * 0.54);
     const stunned = shade.state === "stunned";
-    glow(sx, sy, r * 2.3, palette.shadeOutline + "8c", palette.shadeOutline + "00");
+    const outline = settings.accessiblePalette ? "#00B3FF" : palette.shadeOutline;
+    glow(sx, sy, r * 2.3, outline + "8c", outline + "00");
     ctx.fillStyle = stunned ? palette.shadeStunned : palette.shade;
     ctx.beginPath();
     ctx.ellipse(sx, sy, r, r * 1.28, Math.sin(now * 0.003) * 0.16, 0, TAU);
     ctx.fill();
-    ctx.strokeStyle = palette.shadeOutline;
+    ctx.strokeStyle = outline;
     ctx.lineWidth = Math.max(1, r * .075);
     ctx.stroke();
-    const eyes = stunned ? "#ffd477" : "#de8bf4";
-    dot(sx - r * 0.35, sy - r * 0.18, Math.max(1, r * 0.11), eyes);
-    dot(sx + r * 0.35, sy - r * 0.18, Math.max(1, r * 0.11), eyes);
+    dot(sx - r * 0.35, sy - r * 0.18, Math.max(1, r * 0.11), outline);
+    dot(sx + r * 0.35, sy - r * 0.18, Math.max(1, r * 0.11), outline);
 }
 
 function drawDrifter(cam, drifter, now) {
@@ -341,6 +364,7 @@ function draw(now) {
         const place = cam.project(lamp.pos);
         if (place) {
             ctx.save();
+            ctx.globalAlpha *= flicker(lamp, now);
             ctx.translate(place[0], place[1]);
             ctx.scale(1, 0.40);
             glow(0, 0, Math.min(350, place[2] * 4.6), "#ffc36571", "#ef9e4200");
@@ -362,7 +386,7 @@ function draw(now) {
             queue(pos, () => drawPlant(cam, {...plant, pos}));
         }
     }
-    for (const lamp of world.lanterns) queue(lamp.pos, () => drawLamp(cam, lamp));
+    for (const lamp of world.lanterns) queue(lamp.pos, () => drawLamp(cam, lamp, now));
     for (const mote of world.motes) queue(mote.pos, () => drawMote(cam, mote, now));
     for (const shade of world.shades) queue(shade.pos, () => drawShade(cam, shade, now));
     for (const drifter of world.drifters) queue(drifter.pos, () => drawDrifter(cam, drifter, now));
@@ -442,19 +466,23 @@ function drawLeaves(now, directionDeg) {
     ctx.restore();
 }
 
-let settings = {volume: .45, sensitivity: 1};
+const settings = {volume: .45, sensitivity: 1, accessiblePalette: false};
 try {
     const saved = JSON.parse(localStorage.getItem("lantern-settings"));
     for (const [key, min, max] of [["volume", 0, 1], ["sensitivity", .25, 2.5]]) {
         if (Number.isFinite(saved?.[key])) settings[key] = Math.min(max, Math.max(min, saved[key]));
     }
+    settings.accessiblePalette = saved?.accessiblePalette === true;
 } catch { /* Storage may be disabled by browser preferences. */ }
 sound.gain(settings.volume);
+document.body.classList.toggle("accessible-palette", settings.accessiblePalette);
 for (const key of Object.keys(settings)) {
     const input = fields[key];
-    input.value = settings[key];
+    if (input.type === "checkbox") input.checked = settings[key];
+    else input.value = settings[key];
     input.addEventListener("input", () => {
-        settings[key] = Number(input.value);
+        settings[key] = input.type === "checkbox" ? input.checked : Number(input.value);
+        document.body.classList.toggle("accessible-palette", settings.accessiblePalette);
         sound.gain(settings.volume);
         try { localStorage.setItem("lantern-settings", JSON.stringify(settings)); } catch {}
     });
@@ -475,12 +503,14 @@ function updateHUD() {
     }
     [...fields.flames.children].forEach((icon, index) => icon.classList.toggle("empty", index >= player.flames));
     fields.flames.setAttribute("aria-label", player.flames + " ngọn lửa");
-    if (fields.motes.children.length !== tuning.carry_capacity) {
-        fields.motes.replaceChildren(...Array.from({length: tuning.carry_capacity}, () => document.createElement("i")));
+    if (fields.motes.children.length !== player.capacity) {
+        fields.motes.replaceChildren(...Array.from({length: player.capacity}, () => document.createElement("i")));
     }
     [...fields.motes.children].forEach((cell, index) => cell.classList.toggle("filled", index < player.carried));
-    fields.motes.setAttribute("aria-label", player.carried + "/" + tuning.carry_capacity + " đom đóm");
+    setText(fields["carry-count"], player.carried + "/" + player.capacity);
+    fields.motes.setAttribute("aria-label", player.carried + "/" + player.capacity + " đom đóm");
     setText(fields.lamps, lanterns.filter(lamp => lamp.lit).length + "/" + lanterns.length);
+    setText(fields["dawn-goal"], "Cần " + requiredLights + " lúc bình minh");
     const seconds = Math.ceil(Math.max(0, time));
     setText(fields.time, Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0"));
     fields.time.classList.toggle("urgent", seconds <= 30);
@@ -495,10 +525,14 @@ function updateHUD() {
     setText(charm, "Bùa gió " + Math.ceil(player.charm_s) + "s");
     const [x, y, z] = player.pos;
     const nearby = lanterns.map(lamp => ({lamp, distance: Math.hypot(x - lamp.pos[0], y - lamp.pos[1], z - lamp.pos[2])}))
-        .filter(entry => !entry.lamp.lit && entry.distance <= tuning.interact_radius)
+        .filter(entry => receivingLanterns.has(entry.lamp.id) && entry.distance <= tuning.interact_radius)
         .sort((a, b) => a.distance - b.distance)[0]?.lamp;
+    const cost = nearby?.ever_lit ? tuning.relight_cost : tuning.lantern_cost;
+    const prompt = nearby?.lit ? "E — Châm dầu (" + nearby.fuel.toFixed(1) + "/" + tuning.fuel_max + ")" :
+        nearby ? "E — Nạp ánh sáng (" + nearby.deposited + "/" + cost + ")" : "";
     setText(fields.notice, y < -10 ? "Mây đang trở về đảo…" :
-        nearby && running ? "E — Nạp ánh sáng (" + nearby.deposited + "/" + tuning.lantern_cost + ")" : "");
+        running ? prompt : "");
+    fields.notice.classList.toggle("urgent", running && lowFuel.has(nearby?.id));
     fields.wind.hidden = !wind.active && !windWarning;
     setText(fields.wind, wind.active ? "Gió mạnh" : "Gió mạnh sắp đến");
 }
@@ -512,6 +546,20 @@ async function request(path, data) {
     return result;
 }
 
+function applyGameView(result) {
+    ({snapshot, wind_warning: windWarning, required_lights: requiredLights} = result);
+    lowFuel = new Set(result.low_fuel);
+    receivingLanterns = new Set(result.receiving_lanterns);
+}
+
+function playEvents(events) {
+    for (const event of events) {
+        sound.effect(event.name === "game_over" ? "game_" + event.data.state : event.name);
+        if (event.name === "pulse") pulseAt = performance.now();
+        if (event.name === "player_hit") hitAt = performance.now();
+    }
+}
+
 function overlay(id, title, description, buttons, eyebrow = "") {
     screen = id;
     running = false;
@@ -519,6 +567,7 @@ function overlay(id, title, description, buttons, eyebrow = "") {
     fields.curtain.hidden = false;
     fields.settings.hidden = id !== "settings";
     fields.eyebrow.hidden = !eyebrow;
+    fields.description.hidden = !description;
     setText(fields.eyebrow, eyebrow);
     setText(fields.title, title);
     setText(fields.description, description);
@@ -535,12 +584,13 @@ function overlay(id, title, description, buttons, eyebrow = "") {
 
 function showMenu() {
     snapshot = null;
+    lowFuel.clear();
     night = 1;
     totalScore = 0;
     yaw = 0;
     layout = {islands: [[0, 0, 40]], pads: [], charms: []};
     fields.hud.hidden = true;
-    overlay("menu", "Đảo Đèn Lồng", "Theo Mây qua ba đêm, gom đom đóm và thắp đèn tìm đường về bình minh.",
+    overlay("menu", "Đảo Đèn Lồng", "Gom đom đóm, châm dầu và giữ đảo sáng tới bình minh.",
         [["Bắt đầu", () => showIntro(1)], ["Cài đặt", () => showSettings("menu")]]);
 }
 
@@ -559,7 +609,7 @@ function showPause() {
 
 function showSettings(back) {
     settingsBack = back;
-    overlay("settings", "Cài đặt", "Điều chỉnh âm lượng và độ nhạy khi kéo chuột.",
+    overlay("settings", "Cài đặt", "",
         [["Quay lại", () => settingsBack === "pause" ? showPause() : showMenu()]]);
 }
 
@@ -575,7 +625,8 @@ function showEnd() {
                 [["Đêm kế tiếp", () => showIntro(night + 1)], ["Về menu", showMenu]]);
         }
     } else {
-        const reason = snapshot.player.flames === 0 ? "Ngọn lửa cuối đã tắt." : "Mây đã hết thời gian.";
+        const reason = snapshot.player.flames === 0 ? "Ngọn lửa cuối đã tắt." :
+            "Bình minh đến khi đảo còn thiếu đèn sáng.";
         overlay("result", "Đêm còn dài", reason + " Điểm Đêm: " + score + ".",
             [["Chơi lại Đêm", start], ["Về menu", showMenu]]);
     }
@@ -599,7 +650,8 @@ async function start() {
     sound.unlock();
     try {
         const result = await request("/api/start", {session, night});
-        ({session, snapshot, tuning, layout, wind_warning: windWarning} = result);
+        ({session, tuning, layout} = result);
+        applyGameView(result);
         yaw = facing = 0;
         pulseAt = hitAt = -Infinity;
         previousSecond = Infinity;
@@ -618,7 +670,8 @@ async function resume() {
     try {
         await request("/api/step", {session, ticks: 1, controls: {pause: false}});
         const result = await request("/api/step", {session, ticks: 1, controls: {pause: true}});
-        ({snapshot, wind_warning: windWarning} = result);
+        applyGameView(result);
+        playEvents(result.events);
         if (snapshot.state === "playing") activate();
         else showEnd();
     } catch (error) {
@@ -644,12 +697,8 @@ async function advance(ticks) {
     try {
         const result = await request("/api/step", {session, ticks, controls});
         if (result.wind_warning && !windWarning) sound.effect("wind");
-        ({snapshot, wind_warning: windWarning} = result);
-        for (const event of result.events) {
-            sound.effect(event.name);
-            if (event.name === "pulse") pulseAt = performance.now();
-            if (event.name === "player_hit") hitAt = performance.now();
-        }
+        applyGameView(result);
+        playEvents(result.events);
         updateHUD();
         if (snapshot.state === "paused") showPause();
         if (snapshot.state === "won" || snapshot.state === "lost") showEnd();

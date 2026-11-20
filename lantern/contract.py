@@ -3,7 +3,7 @@ import json
 import math
 from pathlib import Path
 
-from .game import BUTTONS, DRIFTER_STATES, SHADE_STATES, TUNING
+from .game import BUTTONS, DRIFTER_STATES, SHADE_STATES, TUNING, carry_capacity
 from .maps import LAYOUTS
 
 
@@ -72,7 +72,9 @@ def read_scenario(path, night=1):
     require(isinstance(player, dict), "player: expected an object")
     if "pos" in player:
         require(vector(player["pos"], 3), "player.pos: expected [x, y, z]")
-    for field, maximum in (("carried", TUNING["carry_capacity"]), ("flames", None),
+    lights = player.get("successful_lights", 0)
+    require(integer(lights), "player.successful_lights: expected a non-negative integer")
+    for field, maximum in (("carried", carry_capacity(lights)), ("flames", None),
                            ("invuln_ticks", None), ("dash_cd_ticks", None),
                            ("pulse_cd_ticks", None), ("charm_ticks", None)):
         require(field not in player or integer(player[field], maximum=maximum),
@@ -95,8 +97,12 @@ def read_scenario(path, night=1):
                 if "deposited" in entry:
                     require(integer(entry["deposited"], maximum=TUNING["lantern_cost"]),
                             "lanterns.deposited: invalid amount")
-                if "lit" in entry:
-                    require(type(entry["lit"]) is bool, "lanterns.lit: expected a boolean")
+                for flag in ("lit", "ever_lit"):
+                    require(flag not in entry or type(entry[flag]) is bool, f"lanterns.{flag}: expected a boolean")
+                if "fuel" in entry:
+                    fuel = entry["fuel"]
+                    require(number(fuel) and 0 <= fuel <= TUNING["fuel_max"],
+                            "lanterns.fuel: out of range")
             if field in ("shades", "drifters"):
                 states = SHADE_STATES if field == "shades" else DRIFTER_STATES
                 require("state" not in entry or entry["state"] in states, f"{field}.state: invalid state")
@@ -104,6 +110,10 @@ def read_scenario(path, night=1):
                         f"{field}.state_ticks_left: expected a non-negative integer")
             if field == "drifters" and "stolen" in entry:
                 require(integer(entry["stolen"], maximum=3), "drifters.stolen: expected 0 through 3")
+            if field == "shades" and "target_lantern_id" in entry:
+                target = entry["target_lantern_id"]
+                require(target is None or (isinstance(target, str) and target in lantern_ids),
+                        "shades.target_lantern_id: unknown lantern for this night")
             if field == "charms":
                 require("available" not in entry or type(entry["available"]) is bool,
                         "charms.available: expected a boolean")

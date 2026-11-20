@@ -33,7 +33,7 @@ class ContractTest(HeadlessTest):
         self.assertEqual(snapshots[-1]["player"]["pos"][1], 0)
         self.assertEqual([e["tick"] for e in self.events(records, "jumped")], [1])
 
-    def test_partial_deposit_and_last_lantern_win(self):
+    def test_partial_deposit_and_no_early_win_after_last_lantern(self):
         cost = TUNING["lantern_cost"]
         mote_x = TUNING["player_speed"] * 12 / 60 + TUNING["pickup_radius"] - 0.02
         scenario = {**BASE, "time_left_s": 20, "player": {"carried": cost - 2},
@@ -50,10 +50,8 @@ class ContractTest(HeadlessTest):
         self.assertEqual(snapshots[20]["lanterns"][0]["deposited"], cost - 2)
         self.assertEqual([e["tick"] for e in self.events(records, "lantern_deposited")], [1, 22])
         self.assertTrue(snapshots[-1]["lanterns"][0]["lit"])
-        self.assertEqual(records[-1], {"type": "end", "ticks": 22, "state": "won",
-                                       "score": cost * SCORE["per_mote"] + SCORE["per_lantern"]
-                                       + 19 * SCORE["per_second_left"]
-                                       + TUNING["flames"] * SCORE["per_flame_left"]})
+        self.assertEqual(records[-1], {"type": "end", "ticks": 60, "state": "playing",
+                                       "score": cost * SCORE["per_mote"] + SCORE["per_lantern"]})
 
     def test_pickup_capacity_radius_and_shade_ids(self):
         count = TUNING["carry_capacity"]
@@ -82,7 +80,8 @@ class ContractTest(HeadlessTest):
         self.assertEqual(states[1]["shades"][1]["state"], "chase")
         self.assertEqual([event["tick"] for event in self.events(records, "pulse")], [1])
         self.assertEqual(states[120]["shades"][0]["state"], "stunned")
-        self.assertEqual(states[121]["shades"][0]["state"], "chase")
+        self.assertEqual(states[121]["shades"][0]["state"], "wander")
+        self.assertEqual(states[122]["shades"][0]["state"], "chase")
         self.assertEqual(records[-1]["score"], SCORE["per_stun"])
 
     def test_damage_invulnerability_and_early_loss(self):

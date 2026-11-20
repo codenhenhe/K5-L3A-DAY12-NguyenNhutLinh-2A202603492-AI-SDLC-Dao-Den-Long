@@ -31,7 +31,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def game_view(self, game):
-        return dict(snapshot=game.snapshot(), wind_warning=game.wind_warning)
+        return dict(snapshot=game.snapshot(), wind_warning=game.wind_warning,
+                    low_fuel=[lamp.id for lamp in game.lanterns if lamp.weak],
+                    receiving_lanterns=[lamp.id for lamp in game.lanterns if lamp.can_receive],
+                    required_lights=game.required_lights)
 
     def do_POST(self):
         if self.path not in ("/api/start", "/api/step"):

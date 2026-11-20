@@ -19,16 +19,19 @@
       </div>
       <div class="clock" id="time" aria-label="Thời gian"></div>
       <div class="ledger">
-        <div><span>Đèn sáng</span><strong id="lamps"></strong></div>
+        <div><span>Đèn sáng</span><strong id="lamps"></strong><span id="dawn-goal"></span></div>
         <div><span>Điểm</span><strong id="score"></strong></div>
       </div>
-      <div class="carry" id="motes" aria-label="Đom đóm"></div>
+      <div class="carry">
+        <div id="motes" class="mote-cells" aria-label="Đom đóm"></div>
+        <strong id="carry-count"></strong>
+      </div>
       <div class="abilities">
         <div><kbd>Shift</kbd><span>Lướt</span><strong id="dash-cd"></strong></div>
         <div><kbd>F</kbd><span>Tỏa sáng</span><strong id="pulse-cd"></strong></div>
         <span id="charm-timer" hidden></span>
       </div>
-      <p id="wind" role="status" hidden></p>
+      <p id="wind" class="urgent" role="status" hidden></p>
       <p id="notice" role="status"></p>
     </div>
     <footer id="controls">
@@ -43,10 +46,11 @@
         <div class="emblem" aria-hidden="true">✦</div>
         <p id="eyebrow" hidden></p>
         <h1 id="title">Đảo Đèn Lồng</h1>
-        <p id="description">Theo Mây qua ba đêm, gom đom đóm và thắp đèn tìm đường về bình minh.</p>
+        <p id="description">Gom đom đóm và giữ đảo sáng tới bình minh.</p>
         <div id="settings" hidden>
           <label>Âm lượng <input id="volume" type="range" min="0" max="1" step=".05"></label>
           <label>Độ nhạy chuột <input id="sensitivity" type="range" min=".25" max="2.5" step=".05"></label>
+          <label>Bảng màu dễ phân biệt <input id="accessiblePalette" type="checkbox"></label>
         </div>
         <div id="actions"><button type="button">Bắt đầu</button></div>
       </div>
