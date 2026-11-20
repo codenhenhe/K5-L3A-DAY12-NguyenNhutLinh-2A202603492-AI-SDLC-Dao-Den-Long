@@ -53,7 +53,7 @@ test_practice_can_start_later_and_retry_without_ranking (test_phase4.PhaseFourTe
 test_soak_random_input_repeats_seed_and_cli_emits_record (test_phase4.PhaseFourTest.test_soak_random_input_repeats_seed_and_cli_emits_record) ... ok
 
 ----------------------------------------------------------------------
-Ran 53 tests in 5.124s
+Ran 53 tests in 4.880s
 
 OK
 test_cli_rejects_invalid_files (test_phase1.ContractTest.test_cli_rejects_invalid_files) ... ok
@@ -105,14 +105,14 @@ test_v12_invalid_scenario_fields (test_phase3.PhaseThreeContractTest.test_v12_in
 test_wander_chooses_nearest_weak_on_tie_and_chase_does_not_switch (test_phase3.PhaseThreeContractTest.test_wander_chooses_nearest_weak_on_tie_and_chase_does_not_switch) ... ok
 
 ----------------------------------------------------------------------
-Ran 47 tests in 4.377s
+Ran 47 tests in 4.323s
 
 OK
 Phase 3 evidence: deterministic win (533 points) and loss at tick 120.
-night=1, ticks=14400, wall_s=0.635
-night=2, ticks=16200, wall_s=1.080
-night=3, ticks=18000, wall_s=1.569
+night=1, ticks=14400, wall_s=0.633
+night=2, ticks=16200, wall_s=1.094
+night=3, ticks=18000, wall_s=1.580
 v1.3 headless replay matches v1.2 evidence byte for byte.
 Soak: 10 nights, no crashes, current RSS within 120%.
-/run/media/nhutlinh/Shared/aithucchien/day12/dist/dao-den-long-v1.0.0.pyz
-Evidence: /tmp/day12-phase4-map-check
+/tmp/day12-public-audit-i9f7a4f8/repo/dist/dao-den-long-v1.0.0.pyz
+Evidence: /tmp/day12-public-audit-i9f7a4f8/phase4
