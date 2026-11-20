@@ -1,40 +1,48 @@
 # Đảo Đèn Lồng
 
-Đêm 1 · Đảo Bến. Dẫn Mây qua hòn đảo giữa biển mây, gom đom đóm và thắp cả năm Đèn Lồng Lớn trước khi Bóng Mực dập tắt lửa.
+Dẫn Mây qua Đảo Bến, Đảo Sương và Đảo Chuông. Gom đom đóm để thắp các Đèn Lồng Lớn trước khi Bóng Mực dập tắt lửa.
 
 ## Chơi
 
-Cần Python 3.10 trở lên và một trình duyệt desktop trên macOS hoặc Linux. Từ thư mục repo:
+Cần Python 3.10 trở lên và trình duyệt desktop trên macOS hoặc Linux. Từ thư mục repo chạy:
 
 ```sh
 python3 -m lantern play
 ```
 
-Nếu trình duyệt chưa tự mở, vào `http://127.0.0.1:8765`. Chọn **Bắt đầu**. Có thể chọn **Chơi lại** sau khi ván kết thúc.
+Nếu trình duyệt chưa tự mở, vào `http://127.0.0.1:8765`. Nếu cổng mặc định đang được dùng, chạy `python3 -m lantern play --port 8766`.
 
 | Phím | Thao tác |
 |---|---|
 | W A S D | Di chuyển theo hướng camera |
-| ← → | Xoay camera |
+| ← → hoặc kéo chuột | Xoay camera |
 | Space | Nhảy |
-| E | Nạp đom đóm cho đèn chưa sáng gần nhất |
-| F | Tỏa sáng, tốn hai đom đóm và làm choáng Bóng Mực ở gần |
+| Shift | Lướt |
+| E | Nạp ánh sáng vào đèn gần nhất |
+| F | Tỏa sáng |
+| Esc / P | Tạm dừng hoặc tiếp tục |
 
-Đom đóm được nhặt tự động trong tầm, tối đa 12. Mỗi đèn cần 5 đom đóm và có thể nạp nhiều lần. Đèn đã thắp tạo vùng an toàn. Mây có ba ngọn lửa, mất một ngọn khi bị chạm và có 1,25 giây miễn nhiễm sau đó. Không rơi khỏi đảo, không rơi đom đóm khi bị chạm và không có dash. Hết lửa hoặc hết 4 phút thì thua.
+Đom đóm và Bùa Gió được nhặt tự động. Ba Đêm lần lượt dài 5:00, 5:30 và 6:00. Mỗi đèn cần 10 đom đóm và có thể nạp nhiều lần. Đèn đã thắp ngăn Bóng Mực, còn Gió Lạc vẫn vào được để cướp đom đóm. Bùa Gió tăng tốc và bỏ thời gian hồi Lướt trong 10 giây. Tỏa Sáng tốn 3 đom đóm và hồi trong 3 giây. Nếu rơi khỏi đảo, Mây mất một Ngọn Lửa và đom đóm đang mang, rồi trở lại sau 1 giây nếu còn sống.
 
-Điểm gồm 10 cho mỗi đom đóm nhặt được, 100 cho mỗi đèn thắp được và 25 cho mỗi lần làm choáng một Bóng Mực. Khi thắng, cộng điểm theo số giây nguyên còn lại và 50 cho mỗi ngọn lửa còn lại.
+Mỗi đom đóm **đã nạp** được 10 điểm. Thắp đèn được 100 điểm, mỗi Bóng Mực trúng một lần Tỏa Sáng được 5 điểm. Khi thắng, mỗi giây nguyên còn lại được 2 điểm và mỗi Ngọn Lửa còn lại được 50 điểm. Tổng điểm Bình Minh cộng ba Đêm thắng. Nếu thua, có thể chơi lại Đêm đó.
 
 ## Headless và kiểm chứng
 
 ```sh
-python3 -m lantern headless --seed 12 --night 1 --ticks 1800 --out /tmp/lantern.jsonl
+python3 -m lantern headless --seed 42 --night 2 --ticks 1800 --out /tmp/lantern.jsonl
+sh scripts/verify-phase-2.sh
+```
+
+`--night` nhận 1, 2, 3. Thêm `--scenario path.json` để đặt trạng thái ban đầu, `--inputs path.json` để phát lại điều khiển và `--snapshot-every N` để đổi chu kỳ snapshot. Xem [game.contract.json](game.contract.json) cho cấu hình hiện tại và [spec Phase 2](docs/phase-2.md) cho tiêu chí nghiệm thu và bằng chứng.
+
+Bộ kiểm chứng Phase 1 dùng tag `phase-1` để phát lại đúng Contract v1.0:
+
+```sh
 sh scripts/verify-phase-1.sh
 ```
 
-Thêm `--scenario path.json` để đặt trạng thái ban đầu, `--inputs path.json` để chạy theo các frame điều khiển và `--snapshot-every N` để đổi chu kỳ snapshot. Cấu hình chính thức nằm trong [game.contract.json](game.contract.json). Xem [tiêu chí, giả định và bằng chứng](docs/phase-1.md).
-
 ## Sáng tạo của tôi
 
-Đảo tròn cách điệu với biển mây chuyển động, đom đóm lơ lửng và xung sáng lan trên nền đất. Mây có nón lá treo đèn nhỏ. Các hiệu ứng được vẽ từ snapshot, nên ánh sáng, chuyển động trang trí và camera không làm thay đổi kết quả headless. Bộ kiểm chứng so sánh hai lần phát lại cùng một ván mặc định theo từng byte.
+Biển mây chuyển động, đom đóm lơ lửng và xung sáng lan trên nền đất. Mây có nón lá treo đèn nhỏ. Hình ảnh và âm thanh được dựng từ kết quả mô phỏng trong trình duyệt. Bộ kiểm chứng so sánh từng byte của hai lần phát lại cùng đầu vào.
 
-[Tài liệu lab](GUIDE.md) · [Checkpoint](CHECKPOINTS.md) · [Quy cách nộp](SUBMISSION.md) · [Nguồn](CREDITS.md)
+[Hướng dẫn lab](GUIDE.md) · [Checkpoint](CHECKPOINTS.md) · [Quy cách nộp](SUBMISSION.md) · [Nguồn](CREDITS.md)

@@ -1,9 +1,10 @@
-"""Validation for the Phase 1 JSON input files."""
+"""Validation for the headless JSON input files."""
 import json
 import math
 from pathlib import Path
 
-from .game import BUTTONS, TUNING
+from .game import BUTTONS, DRIFTER_STATES, SHADE_STATES, TUNING
+from .maps import LAYOUTS
 
 
 def require(condition, message):
@@ -41,7 +42,7 @@ def validate_controls(frame):
                 "move: expected two numbers in [-1, 1]")
     if "cam_yaw_deg" in frame:
         require(number(frame["cam_yaw_deg"]), "cam_yaw_deg: expected a finite number")
-    for key in (*BUTTONS, "dash"):
+    for key in BUTTONS:
         if key in frame:
             require(type(frame[key]) is bool, f"{key}: expected a boolean")
 
@@ -59,10 +60,10 @@ def read_inputs(path):
     return document["frames"]
 
 
-def read_scenario(path):
+def read_scenario(path, night=1):
     document = read_json(path)
     require(isinstance(document, dict), "scenario: expected an object")
-    for field in ("random_motes", "random_shades"):
+    for field in ("random_motes", "random_shades", "random_drifters", "wind_enabled"):
         require(field not in document or type(document[field]) is bool, f"{field}: expected a boolean")
     if "time_left_s" in document:
         duration = document["time_left_s"]
@@ -71,28 +72,43 @@ def read_scenario(path):
     require(isinstance(player, dict), "player: expected an object")
     if "pos" in player:
         require(vector(player["pos"], 3), "player.pos: expected [x, y, z]")
-    for field, maximum in (("carried", TUNING["carry_capacity"]), ("flames", None)):
+    for field, maximum in (("carried", TUNING["carry_capacity"]), ("flames", None),
+                           ("invuln_ticks", None), ("dash_cd_ticks", None),
+                           ("pulse_cd_ticks", None), ("charm_ticks", None)):
         require(field not in player or integer(player[field], maximum=maximum),
                 f"player.{field}: invalid value")
     motes = document.get("motes", [])
     require(isinstance(motes, list) and all(vector(pos, 3) for pos in motes),
             "motes: expected an array of positions")
-    for field in ("shades", "lanterns"):
+    lantern_ids = {f"L{i}" for i in range(1, len(LAYOUTS[night].lanterns) + 1)}
+    for field in ("shades", "lanterns", "drifters", "charms"):
         entries = document.get(field, [])
         require(isinstance(entries, list), f"{field}: expected an array")
         ids = set()
         for entry in entries:
             require(isinstance(entry, dict), f"{field}: expected objects")
-            if field == "shades" or "pos" in entry:
+            if field in ("shades", "drifters") or "pos" in entry:
                 require(vector(entry.get("pos"), 3), f"{field}.pos: expected [x, y, z]")
             if field == "lanterns":
-                require(entry.get("id") in ("L1", "L2", "L3", "L4", "L5"),
-                        "lanterns.id: expected L1 through L5")
+                require(isinstance(entry.get("id"), str) and entry["id"] in lantern_ids,
+                        "lanterns.id: unknown lantern for this night")
                 if "deposited" in entry:
                     require(integer(entry["deposited"], maximum=TUNING["lantern_cost"]),
                             "lanterns.deposited: invalid amount")
                 if "lit" in entry:
                     require(type(entry["lit"]) is bool, "lanterns.lit: expected a boolean")
+            if field in ("shades", "drifters"):
+                states = SHADE_STATES if field == "shades" else DRIFTER_STATES
+                require("state" not in entry or entry["state"] in states, f"{field}.state: invalid state")
+                require("state_ticks_left" not in entry or integer(entry["state_ticks_left"]),
+                        f"{field}.state_ticks_left: expected a non-negative integer")
+            if field == "drifters" and "stolen" in entry:
+                require(integer(entry["stolen"], maximum=3), "drifters.stolen: expected 0 through 3")
+            if field == "charms":
+                require("available" not in entry or type(entry["available"]) is bool,
+                        "charms.available: expected a boolean")
+                require("respawn_ticks" not in entry or integer(entry["respawn_ticks"]),
+                        "charms.respawn_ticks: expected a non-negative integer")
             if "id" in entry:
                 identifier = entry["id"]
                 require(isinstance(identifier, str) and identifier and identifier not in ids,

@@ -1,51 +1,16 @@
-import json
 import math
-from pathlib import Path
-import subprocess
-import sys
-from tempfile import TemporaryDirectory
 import unittest
 
 from lantern.game import TUNING
+
+from test_support import HeadlessTest
 
 
 BASE = {"random_motes": False, "random_shades": False}
 SCORE = TUNING["score"]
 
 
-class ContractTest(unittest.TestCase):
-    def setUp(self):
-        self.directory = TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
-
-    def run_game(self, ticks, scenario=None, frames=None, every=1, seed=12, expected=0):
-        out = self.root / "run.jsonl"
-        command = [sys.executable, "-m", "lantern", "headless", "--seed", str(seed),
-                   "--night", "1", "--ticks", str(ticks), "--out", str(out),
-                   "--snapshot-every", str(every)]
-        for name, content in (("scenario", scenario), ("inputs", {"frames": frames} if frames is not None else None)):
-            if content is not None:
-                path = self.root / (name + ".json")
-                path.write_text(json.dumps(content), encoding="utf-8")
-                command.extend(("--" + name, str(path)))
-        result = subprocess.run(command, capture_output=True, text=True)
-        self.assertEqual(result.returncode, expected, result.stderr)
-        self.assertEqual(result.stdout, "")
-        if expected:
-            self.assertTrue(result.stderr.strip())
-            return None
-        self.raw = out.read_bytes()
-        return [json.loads(line) for line in self.raw.splitlines()]
-
-    @staticmethod
-    def snapshots(records):
-        return [record for record in records if record["type"] == "snapshot"]
-
-    @staticmethod
-    def events(records, name):
-        return [record for record in records if record.get("name") == name]
-
+class ContractTest(HeadlessTest):
     def test_movement_yaw_normalization_held_input_and_ticks(self):
         records = self.run_game(60, BASE, [
             {"tick": 0, "move": [1, 1], "cam_yaw_deg": 90},
@@ -70,8 +35,9 @@ class ContractTest(unittest.TestCase):
 
     def test_partial_deposit_and_last_lantern_win(self):
         cost = TUNING["lantern_cost"]
+        mote_x = TUNING["player_speed"] * 12 / 60 + TUNING["pickup_radius"] - 0.02
         scenario = {**BASE, "time_left_s": 20, "player": {"carried": cost - 2},
-                    "motes": [[2.6, 0, 0], [2.6, 0, 0]],
+                    "motes": [[mote_x, 0, 0], [mote_x, 0, 0]],
                     "lanterns": [{"id": f"L{i}", "lit": True} for i in range(2, 6)]
                     + [{"id": "L1", "pos": [0, 0, 0]}]}
         frames = [{"tick": 0, "interact": True}, {"tick": 1, "move": [1, 0]},
@@ -85,7 +51,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual([e["tick"] for e in self.events(records, "lantern_deposited")], [1, 22])
         self.assertTrue(snapshots[-1]["lanterns"][0]["lit"])
         self.assertEqual(records[-1], {"type": "end", "ticks": 22, "state": "won",
-                                       "score": 2 * SCORE["per_mote"] + SCORE["per_lantern"]
+                                       "score": cost * SCORE["per_mote"] + SCORE["per_lantern"]
                                        + 19 * SCORE["per_second_left"]
                                        + TUNING["flames"] * SCORE["per_flame_left"]})
 
@@ -105,17 +71,18 @@ class ContractTest(unittest.TestCase):
         cost = TUNING["pulse_cost"]
         reach = TUNING["pulse_radius"]
         records = self.run_game(155, {**BASE, "player": {"carried": cost * 2},
-                                      "shades": [{"pos": [reach, 0, 0]}, {"pos": [0, 0, reach + 1]}]},
+                                      "shades": [{"pos": [reach, 0.8, 0]}, {"pos": [0, 0, reach + 1]}]},
                                 [{"tick": 0, "pulse": True}, {"tick": 1, "pulse": False},
                                  {"tick": 2, "pulse": True}])
         states = self.snapshots(records)
         self.assertEqual(states[1]["player"]["carried"], cost)
         self.assertEqual(states[1]["shades"][0]["state"], "stunned")
-        self.assertEqual(states[1]["shades"][0]["pos"][0], reach + TUNING["pulse_push_m"])
+        self.assertAlmostEqual(states[1]["shades"][0]["pos"][0], reach + TUNING["pulse_push_m"] / 15, places=3)
+        self.assertEqual(states[15]["shades"][0]["pos"][0], reach + TUNING["pulse_push_m"])
         self.assertEqual(states[1]["shades"][1]["state"], "chase")
         self.assertEqual([event["tick"] for event in self.events(records, "pulse")], [1])
-        self.assertEqual(states[150]["shades"][0]["state"], "stunned")
-        self.assertEqual(states[151]["shades"][0]["state"], "chase")
+        self.assertEqual(states[120]["shades"][0]["state"], "stunned")
+        self.assertEqual(states[121]["shades"][0]["state"], "chase")
         self.assertEqual(records[-1]["score"], SCORE["per_stun"])
 
     def test_damage_invulnerability_and_early_loss(self):
@@ -124,7 +91,7 @@ class ContractTest(unittest.TestCase):
         hits = self.events(records, "player_hit")
         delay = math.ceil(TUNING["invuln_s"] * 60)
         self.assertEqual([hit["tick"] for hit in hits], [1, delay + 1])
-        self.assertEqual(hits[0]["data"]["carried"], 4)
+        self.assertEqual(hits[0]["data"]["carried"], 4 - math.floor(4 * TUNING["hit_drop_ratio"]))
         self.assertEqual(records[-1], {"type": "end", "ticks": delay + 1, "state": "lost", "score": 0})
 
     def test_safe_radius_and_timer(self):
@@ -149,7 +116,7 @@ class ContractTest(unittest.TestCase):
                     "lanterns": [{"id": "L1", "pos": [0, 0, 0], "lit": True}],
                     "shades": [{"pos": [x, 0, z]}],
                 }
-                records = self.run_game(2, scenario, [{"tick": 0, "pulse": True}])
+                records = self.run_game(20, scenario, [{"tick": 0, "pulse": True}])
                 _, *snapshots = self.snapshots(records)
                 for snapshot in snapshots:
                     shade = snapshot["shades"][0]
@@ -163,16 +130,20 @@ class ContractTest(unittest.TestCase):
         radius = TUNING["safe_radius"]
         scenario = {
             **BASE,
-            "player": {"pos": [-0.4, 0, 0], "carried": TUNING["pulse_cost"] + TUNING["lantern_cost"]},
-            "lanterns": [{"id": "L1", "pos": [0, 0, 0]}, {"id": "L2", "pos": [6, 0, 0], "lit": True}],
+            "player": {"pos": [-0.4, 0, 0], "carried": TUNING["pulse_cost"] + 1},
+            "lanterns": [{"id": "L1", "pos": [0, 0, 0], "deposited": TUNING["lantern_cost"] - 1},
+                         {"id": "L2", "pos": [8, 0, 0], "lit": True}],
             "shades": [{"pos": [0.2, 0, 0]}],
         }
-        records = self.run_game(2, scenario, [{"tick": 0, "pulse": True}, {"tick": 1, "interact": True}])
-        _, before_lighting, after_lighting = self.snapshots(records)
+        records = self.run_game(31, scenario, [{"tick": 0, "pulse": True}, {"tick": 1, "interact": True}])
+        snapshots = self.snapshots(records)
+        before_lighting, first_lit, after_lighting = snapshots[1], snapshots[2], snapshots[31]
         self.assertLess(abs(before_lighting["shades"][0]["pos"][0]), radius)
-        self.assertTrue(after_lighting["lanterns"][0]["lit"])
+        self.assertTrue(first_lit["lanterns"][0]["lit"])
+        self.assertLess(first_lit["shades"][0]["pos"][0], radius)
         self.assertEqual(after_lighting["shades"][0]["state"], "stunned")
-        self.assertGreater(after_lighting["shades"][0]["pos"][0], 6 + radius)
+        self.assertGreater(after_lighting["shades"][0]["pos"][0], 8 + radius)
+        self.assertFalse(self.events(records, "player_hit"))
 
     def test_empty_scenario_preserves_default_shore(self):
         frames = [{"tick": 0, "move": [1, 0]}]
@@ -181,13 +152,23 @@ class ContractTest(unittest.TestCase):
         self.run_game(400, scenario={}, frames=frames, every=100)
         self.assertEqual(self.raw, default_trace)
 
-    def test_player_placed_beyond_shore_stays_put_until_input(self):
-        records = self.run_game(2, {**BASE, "player": {"pos": [48, 0, 0]}},
-                                [{"tick": 1, "move": [-1, 0]}])
-        start, idle, moving = self.snapshots(records)
-        self.assertEqual(start["player"]["pos"], [48, 0, 0])
-        self.assertEqual(idle["player"]["pos"], start["player"]["pos"])
-        self.assertAlmostEqual(moving["player"]["pos"][0], 48 - TUNING["player_speed"] / 60, places=3)
+    def test_player_crossing_shore_falls_and_respawns(self):
+        edge = 40 - TUNING["player_speed"] / 120
+        records = self.run_game(121, {**BASE, "player": {"pos": [edge, 0, 0], "carried": 4, "invuln_ticks": 300}},
+                                [{"tick": 0, "move": [1, 0]}, {"tick": 60, "move": [0, 0]}])
+        snapshots = self.snapshots(records)
+        start = snapshots[0]
+        self.assertAlmostEqual(start["player"]["pos"][0], edge, places=3)
+        hit, = self.events(records, "player_hit")
+        fall = hit["tick"]
+        self.assertGreaterEqual(snapshots[fall - 1]["player"]["pos"][1], -10)
+        self.assertLess(snapshots[fall]["player"]["pos"][1], -10)
+        self.assertEqual(hit["data"], {"reason": "fall", "lost": 4, "flames": 2, "carried": 0})
+        self.assertEqual(snapshots[fall + 59]["player"]["pos"], snapshots[fall]["player"]["pos"])
+        recovered = snapshots[fall + 60]["player"]
+        self.assertEqual(recovered["pos"], [0, 0, 0])
+        self.assertEqual(recovered["vel"], [0, 0, 0])
+        self.assertTrue(recovered["invuln"])
 
     def test_default_world_is_repeatable_and_seed_changes_spawn(self):
         first = self.run_game(480, every=10)
@@ -195,7 +176,7 @@ class ContractTest(unittest.TestCase):
         second = self.run_game(480, every=10)
         self.assertEqual(self.raw, expected_bytes)
         self.assertEqual(first, second)
-        self.assertNotEqual(first[0]["shades"], self.run_game(480, every=10, seed=123)[0]["shades"])
+        self.assertNotEqual(self.snapshots(first)[30]["shades"], self.snapshots(self.run_game(480, every=10, seed=123))[30]["shades"])
         self.assertEqual(len(first[0]["lanterns"]), 5)
 
     def test_cli_rejects_invalid_files(self):
@@ -212,9 +193,9 @@ class ContractTest(unittest.TestCase):
                 self.run_game(1, frames=[{"tick": 0, "note": constant}], expected=2)
                 self.run_game(1, scenario={"note": constant}, expected=2)
 
-    def test_zero_ticks_only_initial_and_end(self):
+    def test_zero_ticks_initial_night_event_and_end(self):
         records = self.run_game(0, BASE, [{"tick": 0, "jump": True}])
-        self.assertEqual([r["type"] for r in records], ["snapshot", "end"])
+        self.assertEqual([r["type"] for r in records], ["snapshot", "event", "end"])
         self.assertEqual(records[-1]["ticks"], 0)
 
 

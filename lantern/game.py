@@ -1,31 +1,63 @@
-"""Fixed-step simulation used by both the playable game and the grader."""
+"""Fixed-step game shared by headless and browser play."""
 from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
 import random
+import re
+
+from .maps import LAYOUTS, ground
 
 ROOT = Path(__file__).resolve().parent.parent
 TUNING = json.loads((ROOT / "game.contract.json").read_text())["tuning"]
 HZ = 60
-ISLAND_RADIUS = 36
-SHORE_RADIUS = ISLAND_RADIUS - 0.8
-# Keep a shade outside the true zone after JSONL coordinates round to millimetres.
-ZONE_MARGIN = 0.001
-BUTTONS = ("jump", "interact", "pulse")
+DT = 1 / HZ
+BUTTONS = ("jump", "interact", "pulse", "dash", "pause")
 DEFAULT_INPUT = dict(move=(0, 0), cam_yaw_deg=0, **dict.fromkeys(BUTTONS, False))
+SHADE_STATES = ("spawning", "wander", "chase", "recoil", "stunned")
+DRIFTER_STATES = ("idle", "chase", "flee", "removed")
+
+GRAVITY = 20
+JUMP_SPEED = 7
+VERTICAL_REACH = 1.5
+MOTE_SPAWN_TICKS = 240
+DROPPED_TTL = 480
+SHADE_SPAWNING_TICKS = 30
+PULSE_PUSH_TICKS = 15
+RECOIL_TICKS = 60
+EVICTION_TICKS = 30
+RESPAWN_TICKS = 60
+CHARM_TICKS = 600
+CHARM_RESPAWN = 2700
+CHARM_SPEED = 7.2
+ZONE_MARGIN = 0.001
 
 
 def distance(a, b):
     return math.hypot(a[0] - b[0], a[2] - b[2])
 
 
+def direction(a, b, fallback=(0, 1)):
+    dx, dz = b[0] - a[0], b[2] - a[2]
+    length = math.hypot(dx, dz)
+    return (dx / length, dz / length) if length else fallback
+
+
 def position(point):
     return [round(value, 3) for value in point]
 
 
-def seconds_to_ticks(seconds):
+def ticks(seconds):
     return math.ceil(seconds * HZ)
+
+
+def id_order(entity):
+    match = re.fullmatch(r"([^0-9]*)([0-9]+)", entity.id)
+    if match:
+        prefix, sequence = match.groups()
+        sequence = sequence.lstrip("0") or "0"
+        return prefix, len(sequence), sequence, entity.id
+    return entity.id, 0, "", entity.id
 
 
 @dataclass
@@ -40,220 +72,510 @@ class Lantern:
 class Mote:
     id: str
     pos: list
+    kind: str = "random"
+    ttl: int | None = None
 
 
 @dataclass
 class Shade:
     id: str
     pos: list
-    stunned_until: int = 0
-    state: str = "chase"
+    state: str = "wander"
+    remaining: int = 0
+    heading: tuple = (0, 1)
+    impulse: tuple = (0, 0)
+    impulse_ticks: int = 0
+    evict_ticks: int = 0
+    evicting: bool = False
+    evict_heading: tuple = (1, 0)
+
+
+@dataclass
+class Drifter:
+    id: str
+    pos: list
+    state: str = "idle"
+    stolen: int = 0
+    remaining: int = 0
+    heading: tuple = (0, 1)
+
+
+@dataclass
+class Charm:
+    id: str
+    pos: list
+    available: bool = True
+    remaining: int = 0
 
 
 class Game:
-    def __init__(self, seed, scenario=None):
-        settings = scenario or {}
-        self.tick = 0
-        self.duration = settings.get("time_left_s", TUNING["night1_duration_s"])
+    def __init__(self, seed, scenario=None, night=1):
+        config = scenario or {}
+        self.night = night
+        self.layout = LAYOUTS[night]
+        self.tick = self.sim_tick = self.score = 0
+        self.duration = config.get("time_left_s", TUNING[f"night{night}_duration_s"])
         self.state = "playing"
-        self.score = 0
-        self.pos = list(settings.get("player", {}).get("pos", (0, 0, 0)))
-        self.carried = settings.get("player", {}).get("carried", 0)
-        self.flames = settings.get("player", {}).get("flames", TUNING["flames"])
-        self.vertical_speed = 0
-        self.invulnerable_until = 0
-        self.pulse_ready = 0
-        self.previous = DEFAULT_INPUT.copy()
         self.events = []
-        self.lanterns = [
-            Lantern(f"L{i}", [x, 0, z])
-            for i, (x, z) in enumerate(((0, 8), (13, 15), (16, -5), (-1, -17), (-15, 4)), 1)
-        ]
-        updates = {entry["id"]: entry for entry in settings.get("lanterns", ())}
-        for lamp in self.lanterns:
-            entry = updates.get(lamp.id, {})
-            lamp.pos = list(entry.get("pos", lamp.pos))
-            lamp.deposited = entry.get("deposited", TUNING["lantern_cost"] if entry.get("lit") else 0)
-            lamp.lit = entry.get("lit", lamp.deposited >= TUNING["lantern_cost"])
+        self.rng = random.Random(seed)
+        self.wind_rng = random.Random(seed + 131)
+        self.wind_enabled = config.get("wind_enabled", night == 3)
+        self.wind_angle = 0
+        self.wind_active = False
+        self.wind_warning = False
+        player = config.get("player", {})
+        self.pos = list(player.get("pos", self.layout.start))
+        self.vel = [0.0, 0.0, 0.0]
+        self.facing = (0, 1)
+        floor = ground(night, self.pos[0], self.pos[2])
+        self.grounded = floor is not None and math.isclose(self.pos[1], floor, abs_tol=1e-9)
+        self.carried = player.get("carried", 0)
+        self.flames = player.get("flames", TUNING["flames"])
+        self.invuln = player.get("invuln_ticks", 0)
+        self.pulse_cd = player.get("pulse_cd_ticks", 0)
+        self.dash_cd = player.get("dash_cd_ticks", 0)
+        self.charm_ticks = player.get("charm_ticks", 0)
+        self.dash_ticks = 0
+        self.dash_heading = self.facing
+        self.launch = None
+        self.respawn_ticks = 0
+        self.previous = DEFAULT_INPUT.copy()
+        self.random_motes = config.get("random_motes", True)
+        self.random_shades = config.get("random_shades", True)
+        self.random_drifters = config.get("random_drifters", night != 1)
+        self.issued_ids = {"M": set(), "S": set(), "D": set(), "C": set()}
+        self.next_id = dict.fromkeys(self.issued_ids, 1)
 
-        rng = random.Random(seed)
-        points = []
-        if settings.get("random_motes", True):
-            for lamp in self.lanterns:
-                for i in range(8):
-                    angle = math.tau * i / 8 + rng.uniform(-0.17, 0.17)
-                    radius = rng.uniform(2.7, 5.1)
-                    x, _, z = lamp.pos
-                    points.append((x + math.cos(angle) * radius, 0, z + math.sin(angle) * radius))
-            points.extend((0, 0, z) for z in (1.6, 3.5, 5.4))
-        points = settings.get("motes", points)
-        self.motes = [Mote(f"M{i}", list(point)) for i, point in enumerate(points, 1)]
-        spawn = []
-        if settings.get("random_shades", True):
-            angle = rng.uniform(-0.3, 0.3)
-            spawn = [{"pos": [math.cos(a + angle) * 27, 0.8, math.sin(a + angle) * 27]}
-                     for a in (0.3, 2.0, 4.4)]
-        spawn = settings.get("shades", spawn)
-        used_ids = {entry["id"] for entry in spawn if "id" in entry}
-        self.shades = []
-        next_id = 1
-        for entry in spawn:
-            if "id" in entry:
-                shade_id = entry["id"]
-            else:
-                while f"S{next_id}" in used_ids:
-                    next_id += 1
-                shade_id = f"S{next_id}"
-                next_id += 1
-            self.shades.append(Shade(shade_id, list(entry["pos"])))
+        overrides = {entry["id"]: entry for entry in config.get("lanterns", ())}
+        self.lanterns = []
+        for i, pos in enumerate(self.layout.lanterns, 1):
+            name = f"L{i}"
+            entry = overrides.get(name, {})
+            deposited = entry.get("deposited", TUNING["lantern_cost"] if entry.get("lit") else 0)
+            self.lanterns.append(Lantern(name, list(entry.get("pos", pos)), deposited,
+                                         entry.get("lit", deposited >= TUNING["lantern_cost"])))
+
+        points = self.rng.sample(self.layout.motes, 20) if self.random_motes else ()
+        self.motes = [Mote(self.identifier("M"), list(pos)) for pos in config.get("motes", points)]
+        shades = config.get("shades", ())
+        self.reserve("S", shades)
+        self.shades = [Shade(self.identifier("S", entry.get("id")), list(entry["pos"]),
+                             entry.get("state", "chase"), entry.get("state_ticks_left", 0))
+                       for entry in shades]
+        drifters = config.get("drifters", ())
+        self.reserve("D", drifters)
+        self.drifters = [
+            Drifter(self.identifier("D", entry.get("id")), list(entry["pos"]), entry.get("state", "idle"),
+                    entry.get("stolen", 0), entry.get("state_ticks_left", 240 if entry.get("state") == "flee" else 0))
+            for entry in drifters if entry.get("state") != "removed"
+        ]
+        charms = config.get("charms", tuple({"pos": pos} for pos in self.layout.charms))
+        self.reserve("C", charms)
+        self.charms = []
+        for entry in charms:
+            name = self.identifier("C", entry.get("id"))
+            index = int(name[1:]) - 1 if name.startswith("C") and name[1:].isdigit() else -1
+            pos = entry.get("pos", self.layout.charms[index] if 0 <= index < len(self.layout.charms) else (0, 0, 0))
+            available = entry.get("available", True)
+            self.charms.append(Charm(name, list(pos), available,
+                                     entry.get("respawn_ticks", 0 if available else CHARM_RESPAWN)))
+
+    def reserve(self, prefix, entries):
+        self.issued_ids[prefix].update(entry["id"] for entry in entries if "id" in entry)
+
+    def identifier(self, prefix, explicit=None):
+        if explicit is not None:
+            return explicit
+        while True:
+            name = f"{prefix}{self.next_id[prefix]}"
+            self.next_id[prefix] += 1
+            if name not in self.issued_ids[prefix]:
+                self.issued_ids[prefix].add(name)
+                return name
 
     @property
     def time_left(self):
-        return self.duration - self.tick / HZ
+        return self.duration - self.sim_tick / HZ
 
     def event(self, name, **data):
         self.events.append(dict(type="event", tick=self.tick, name=name, data=data))
 
-    def move(self, controls, jump):
+    def counters(self):
+        self.invuln = max(0, self.invuln - 1)
+        self.dash_cd = max(0, self.dash_cd - 1)
+        self.pulse_cd = max(0, self.pulse_cd - 1)
+        self.charm_ticks = max(0, self.charm_ticks - 1)
+        for shade in self.shades:
+            shade.remaining = max(0, shade.remaining - 1)
+            if shade.state in ("stunned", "spawning", "recoil") and not (shade.remaining or shade.impulse_ticks):
+                shade.state = "wander"
+        for mote in self.motes:
+            if mote.ttl is not None:
+                mote.ttl -= 1
+        self.motes = [mote for mote in self.motes if mote.ttl is None or mote.ttl > 0]
+        for charm in self.charms:
+            if not charm.available:
+                charm.remaining = max(0, charm.remaining - 1)
+                charm.available = not charm.remaining
+        for drifter in self.drifters:
+            if drifter.state == "flee":
+                drifter.remaining -= 1
+                if drifter.remaining <= 0:
+                    drifter.state = "removed"
+        self.drifters = [drifter for drifter in self.drifters if drifter.state != "removed"]
+        if self.wind_enabled:
+            offset = self.sim_tick % (30 * HZ)
+            if offset == 28 * HZ:
+                self.wind_angle = self.wind_rng.randrange(360)
+            self.wind_warning = offset >= 28 * HZ
+            self.wind_active = self.sim_tick >= 30 * HZ and offset < 5 * HZ
+
+    def pad_launch(self):
+        if not self.grounded:
+            return False
+        for pos, (x, z), speed, vertical in self.layout.pads:
+            if abs(self.pos[1] - pos[1]) < 0.05 and distance(self.pos, pos) <= 1:
+                dx, dz = direction(pos, (x, 0, z))
+                self.launch = (dx * speed, dz * speed)
+                self.vel[1] = vertical
+                self.grounded = False
+                self.event("jumped")
+                return True
+        return False
+
+    def move(self, controls, pressed):
         x, z = controls["move"]
         magnitude = max(1, math.hypot(x, z))
-        theta = math.radians(controls["cam_yaw_deg"] % 360)
-        step = TUNING["player_speed"] / (HZ * magnitude)
-        # A scenario can place Mây beyond the shore. Preserve that position
-        # until input moves Mây, and allow Mây to return toward the island.
-        limit = max(SHORE_RADIUS, math.hypot(self.pos[0], self.pos[2]))
-        self.pos[0] += (x * math.cos(theta) + z * math.sin(theta)) * step
-        self.pos[2] += (-x * math.sin(theta) + z * math.cos(theta)) * step
-        radius = math.hypot(self.pos[0], self.pos[2])
-        if radius > limit:
-            self.pos[0] *= limit / radius
-            self.pos[2] *= limit / radius
-        if jump and self.pos[1] <= 0:
-            self.vertical_speed = 5.2
+        angle = math.radians(controls["cam_yaw_deg"] % 360)
+        dx = (x * math.cos(angle) + z * math.sin(angle)) / magnitude
+        dz = (-x * math.sin(angle) + z * math.cos(angle)) / magnitude
+        if dx or dz:
+            self.facing = direction((0, 0, 0), (dx, 0, dz))
+        if pressed["dash"] and not self.dash_ticks and (not self.dash_cd or self.charm_ticks):
+            self.dash_ticks = ticks(TUNING["dash_duration_s"])
+            self.dash_cd = 0 if self.charm_ticks else ticks(TUNING["dash_cooldown_s"])
+            self.dash_heading = self.facing
+            self.event("dash")
+        launched = self.pad_launch()
+        if pressed["jump"] and self.grounded:
+            self.grounded = False
+            self.vel[1] = JUMP_SPEED
             self.event("jumped")
-        if self.pos[1] > 0 or self.vertical_speed > 0:
-            self.pos[1] = max(0, self.pos[1] + self.vertical_speed / HZ)
-            self.vertical_speed -= 12 / HZ
-            if self.pos[1] == 0:
-                self.vertical_speed = 0
+        speed = CHARM_SPEED if self.charm_ticks else TUNING["player_speed"]
+        vx, vz = dx * speed, dz * speed
+        if self.launch:
+            vx, vz = self.launch
+        if self.dash_ticks:
+            vx, vz = (axis * TUNING["dash_speed"] for axis in self.dash_heading)
+            self.dash_ticks -= 1
+            dashing = True
+        else:
+            dashing = False
+        if self.wind_active:
+            angle = math.radians(self.wind_angle)
+            vx += 2 * math.cos(angle)
+            vz += 2 * math.sin(angle)
+
+        x0, y0, z0 = self.pos
+        x, z = x0 + vx * DT, z0 + vz * DT
+        old_floor = ground(self.night, x0, z0)
+        floor = ground(self.night, x, z)
+        # A small climb is a ramp sample; larger rises are vertical faces.
+        if (floor is not None and floor > y0 + 0.25
+                and old_floor != floor and (self.grounded or floor > y0 + max(0, self.vel[1]) * DT)):
+            x, z, floor = x0, z0, old_floor
+            vx = vz = 0
+        if self.night == 3 and 6 <= y0 <= 14 and math.hypot(x, z) < 2:
+            x, z, floor = x0, z0, old_floor
+            vx = vz = 0
+        self.pos[0], self.pos[2] = x, z
+        self.vel[0], self.vel[2] = vx, vz
+
+        if dashing and not (self.grounded and floor == y0):
+            self.grounded = floor is not None and floor == y0
+        elif self.grounded and floor is not None and abs(floor - y0) <= 0.25:
+            self.pos[1] = floor
+            self.vel[1] = 0
+        else:
+            self.grounded = False
+            self.pos[1] += self.vel[1] * DT - GRAVITY * DT * DT / 2
+            self.vel[1] -= GRAVITY * DT
+            if floor is not None and self.vel[1] <= 0 and self.pos[1] <= floor <= y0 + 1e-9:
+                self.pos[1] = floor
+                self.vel[1] = 0
+                self.grounded = True
+                self.launch = None
+        if not launched:
+            self.pad_launch()
+        # Integration around exactly -10 can accumulate floating-point noise.
+        if self.pos[1] < -10 - 1e-9 and TUNING["fall_enabled"]:
+            self.fall()
+
+    def fall(self):
+        lost = self.carried
+        self.carried = 0
+        self.flames = max(0, self.flames - 1)
+        self.vel[:] = (0, 0, 0)
+        self.grounded = False
+        self.launch = None
+        self.dash_ticks = 0
+        self.respawn_ticks = RESPAWN_TICKS if self.flames else 0
+        self.event("player_hit", reason="fall", lost=lost, flames=self.flames, carried=self.carried)
+
+    def recover(self):
+        if not self.respawn_ticks:
+            return False
+        self.respawn_ticks -= 1
+        if not self.respawn_ticks:
+            self.pos[:] = self.layout.start
+            self.vel[:] = (0, 0, 0)
+            self.facing = (0, 1)
+            self.grounded = True
+            self.invuln = ticks(TUNING["invuln_s"])
+        return True
+
+    def in_reach(self, pos, radius):
+        return distance(self.pos, pos) <= radius and abs(self.pos[1] - pos[1]) <= VERTICAL_REACH
 
     def pickup(self):
-        remaining = []
+        keep = []
         for mote in self.motes:
-            if self.carried < TUNING["carry_capacity"] and distance(self.pos, mote.pos) <= TUNING["pickup_radius"]:
+            if self.carried < TUNING["carry_capacity"] and self.in_reach(mote.pos, TUNING["pickup_radius"]):
                 self.carried += 1
-                self.score += TUNING["score"]["per_mote"]
                 self.event("mote_picked", id=mote.id, carried=self.carried)
             else:
-                remaining.append(mote)
-        self.motes = remaining
+                keep.append(mote)
+        self.motes = keep
+        for charm in self.charms:
+            if charm.available and self.in_reach(charm.pos, TUNING["pickup_radius"]):
+                self.charm_ticks = CHARM_TICKS
+                self.dash_cd = 0
+                charm.available, charm.remaining = False, CHARM_RESPAWN
+                self.event("charm_picked", charm_id=charm.id, charm_ticks=CHARM_TICKS)
 
     def deposit(self):
-        lamp = min(
-            (lamp for lamp in self.lanterns if not lamp.lit),
-            key=lambda lamp: distance(lamp.pos, self.pos), default=None,
-        )
-        if lamp is None or distance(lamp.pos, self.pos) > TUNING["interact_radius"]:
+        lamp = min((lamp for lamp in self.lanterns if not lamp.lit),
+                   key=lambda lamp: (math.dist(lamp.pos, self.pos), id_order(lamp)), default=None)
+        if lamp is None or math.dist(lamp.pos, self.pos) > TUNING["interact_radius"]:
             return
         amount = min(self.carried, TUNING["lantern_cost"] - lamp.deposited)
         if amount <= 0:
             return
         lamp.deposited += amount
         self.carried -= amount
-        self.event("lantern_deposited", id=lamp.id, amount=amount,
-                   deposited=lamp.deposited, carried=self.carried)
+        self.score += amount * TUNING["score"]["per_mote"]
+        self.event("lantern_deposited", id=lamp.id, amount=amount, deposited=lamp.deposited, carried=self.carried)
         if lamp.deposited == TUNING["lantern_cost"]:
             lamp.lit = True
             self.score += TUNING["score"]["per_lantern"]
             self.event("lantern_lit", id=lamp.id)
 
-    def pulse(self):
-        if self.tick < self.pulse_ready or self.carried < TUNING["pulse_cost"]:
-            return
-        self.carried -= TUNING["pulse_cost"]
-        self.pulse_ready = self.tick + seconds_to_ticks(TUNING["pulse_cooldown_s"])
-        self.event("pulse", carried=self.carried)
-        for shade in self.shades:
-            separation = distance(self.pos, shade.pos)
-            if separation > TUNING["pulse_radius"]:
-                continue
-            dx = (shade.pos[0] - self.pos[0]) / separation if separation else 1
-            dz = (shade.pos[2] - self.pos[2]) / separation if separation else 0
-            push_distance = TUNING["pulse_push_m"]
-            for entry, leave in self.shade_zone_intervals(shade.pos, dx, dz):
-                # If the shade already touches the buffered zone, let it
-                # keep moving away but prevent a push deeper into the zone.
-                if leave > 0 and (entry >= 0 or entry + leave > 0):
-                    push_distance = min(push_distance, max(0, entry))
-            shade.pos[0] += dx * push_distance
-            shade.pos[2] += dz * push_distance
-            shade.stunned_until = self.tick + seconds_to_ticks(TUNING["pulse_stun_s"])
-            shade.state = "stunned"
-            self.score += TUNING["score"]["per_stun"]
-            self.event("shade_stunned", id=shade.id)
+    def zone(self, pos):
+        return next((lamp for lamp in self.lanterns if lamp.lit
+                     and distance(lamp.pos, pos) <= TUNING["safe_radius"]), None)
 
-    def protected(self, point):
-        return any(lamp.lit and distance(lamp.pos, point) <= TUNING["safe_radius"]
-                   for lamp in self.lanterns)
-
-    def shade_zone_intervals(self, pos, dx, dz):
-        """Yield where the line from pos in unit direction (dx, dz) meets lit zones."""
+    def zone_intervals(self, point, dx, dz):
         radius = TUNING["safe_radius"] + ZONE_MARGIN
         for lamp in self.lanterns:
-            if not lamp.lit:
-                continue
-            x, z = lamp.pos[0] - pos[0], lamp.pos[2] - pos[2]
-            lateral = abs(x * dz - z * dx)
-            if lateral <= radius:
-                center = x * dx + z * dz
-                half_chord = math.sqrt(radius**2 - lateral**2)
-                yield center - half_chord, center + half_chord
+            if lamp.lit:
+                x, z = lamp.pos[0] - point[0], lamp.pos[2] - point[2]
+                lateral = abs(x * dz - z * dx)
+                if lateral <= radius:
+                    along = x * dx + z * dz
+                    extent = math.sqrt(radius**2 - lateral**2)
+                    yield along - extent, along + extent
 
-    def repel_shade(self, shade, lamp):
-        x, z = shade.pos[0] - lamp.pos[0], shade.pos[2] - lamp.pos[2]
-        magnitude = math.hypot(x, z)
-        dx, dz = (x / magnitude, z / magnitude) if magnitude else (1, 0)
-        # Reach the end of the connected safe zone, including overlapping lamps.
-        distance_out = 0
-        for entry, leave in sorted(self.shade_zone_intervals(shade.pos, dx, dz)):
-            if entry > distance_out:
+    def clear_zones(self):
+        for shade in self.shades:
+            lamp = self.zone(shade.pos)
+            shade.evicting = lamp is not None
+            if lamp is None:
+                shade.evict_ticks = 0
+            elif not shade.evict_ticks:
+                shade.evict_ticks = EVICTION_TICKS
+                shade.evict_heading = direction(lamp.pos, shade.pos, (1, 0))
+
+    def evict_shade(self, shade):
+        dx, dz = shade.evict_heading
+        exit_distance = 0
+        for entry, leave in sorted(self.zone_intervals(shade.pos, dx, dz)):
+            if entry > exit_distance:
                 break
-            distance_out = max(distance_out, leave)
-        shade.pos[0] += dx * distance_out
-        shade.pos[2] += dz * distance_out
+            exit_distance = max(exit_distance, leave)
+        length = exit_distance / shade.evict_ticks
+        shade.pos[0] += dx * length
+        shade.pos[2] += dz * length
+        shade.evict_ticks -= 1
+
+    def pulse(self):
+        if self.pulse_cd or self.carried < TUNING["pulse_cost"]:
+            return
+        self.carried -= TUNING["pulse_cost"]
+        self.pulse_cd = ticks(TUNING["pulse_cooldown_s"])
+        self.event("pulse", carried=self.carried)
+        center = (self.pos[0], self.pos[1] + 0.8, self.pos[2])
+        for shade in self.shades:
+            if math.dist(center, shade.pos) > TUNING["pulse_radius"]:
+                continue
+            dx, dz = direction(self.pos, shade.pos, (1, 0))
+            shade.state = "stunned"
+            shade.remaining = ticks(TUNING["pulse_stun_s"])
+            shade.impulse = (dx * TUNING["pulse_push_m"] / PULSE_PUSH_TICKS,
+                              dz * TUNING["pulse_push_m"] / PULSE_PUSH_TICKS)
+            shade.impulse_ticks = PULSE_PUSH_TICKS
+            self.score += TUNING["score"]["per_stun"]
+            self.event("shade_stunned", id=shade.id)
+        for drifter in self.drifters:
+            if math.dist(center, drifter.pos) > TUNING["pulse_radius"]:
+                continue
+            if drifter.state == "chase":
+                self.send_fleeing(drifter, 240)
+            elif drifter.state == "flee" and drifter.stolen:
+                amount = drifter.stolen
+                self.drop(drifter.pos, amount)
+                drifter.stolen = 0
+                drifter.remaining = 120
+                self.event("drifter_drop", drifter_id=drifter.id, amount=amount)
+
+    def drop(self, pos, count, spread=False):
+        for _ in range(count):
+            x, y, z = pos
+            if spread:
+                angle = self.rng.uniform(0, math.tau)
+                radius = self.rng.uniform(1.5, 2.5)
+                x += math.cos(angle) * radius
+                z += math.sin(angle) * radius
+            floor = ground(self.night, x, z)
+            point = [x, y if floor is None else floor, z]
+            self.motes.append(Mote(self.identifier("M"), point, "dropped", DROPPED_TTL))
+
+    def displace_shade(self, shade, dx, dz, length):
+        """Move a shade up to length, stopping at lit zones and terrain."""
+        if length <= 0:
+            return True
+        for entry, leave in self.zone_intervals(shade.pos, dx, dz):
+            if leave > 0 and (entry >= 0 or entry + leave > 0):
+                length = min(length, max(0, entry))
+        if not length:
+            return False
+        x, z = shade.pos[0] + dx * length, shade.pos[2] + dz * length
+        floor = ground(self.night, x, z)
+        previous_floor = ground(self.night, shade.pos[0], shade.pos[2])
+        if (floor is None or (previous_floor is not None and floor - previous_floor > 0.25)
+                or (self.night == 3 and floor == 6 and math.hypot(x, z) < 2)):
+            return False
+        shade.pos = [x, shade.pos[1] if floor == previous_floor else floor + 0.8, z]
+        return True
 
     def move_shades(self):
-        safe_player = self.protected(self.pos)
         for shade in self.shades:
-            stunned = self.tick < shade.stunned_until
-            near_lamp = next((lamp for lamp in self.lanterns
-                              if lamp.lit and distance(lamp.pos, shade.pos) <= TUNING["safe_radius"]), None)
-            if near_lamp:
-                self.repel_shade(shade, near_lamp)
-                shade.state = "stunned" if stunned else "repelled"
+            if shade.evicting:
+                self.evict_shade(shade)
+                shade.impulse_ticks = max(0, shade.impulse_ticks - 1)
                 continue
-            if stunned:
+            if shade.state == "recoil" and not shade.impulse_ticks and shade.remaining:
+                # A scenario may inject recoil without a preceding hit.
+                dx, dz = direction(self.pos, shade.pos, (1, 0))
+                shade.impulse = (dx * 2 / RECOIL_TICKS, dz * 2 / RECOIL_TICKS)
+                shade.impulse_ticks = shade.remaining
+            if shade.impulse_ticks:
+                dx, dz = shade.impulse
+                length = math.hypot(dx, dz)
+                if length and not self.displace_shade(shade, dx / length, dz / length, length):
+                    shade.impulse = (0, 0)
+                shade.impulse_ticks -= 1
+                if shade.state == "recoil" and not shade.impulse_ticks and not shade.remaining:
+                    shade.state = "wander"
                 continue
-            shade.state = "chase"
-            separation = distance(shade.pos, self.pos)
-            if separation:
-                length = min(separation, TUNING["shade_speed"] / HZ)
-                next_pos = [
-                    shade.pos[0] + (self.pos[0] - shade.pos[0]) * length / separation,
-                    shade.pos[1],
-                    shade.pos[2] + (self.pos[2] - shade.pos[2]) * length / separation,
-                ]
-                if self.protected(next_pos):
-                    shade.state = "repelled"
-                    continue
-                shade.pos = next_pos
-            if (not safe_player and distance(shade.pos, self.pos) <= TUNING["shade_hit_radius"]
-                    and self.tick >= self.invulnerable_until):
-                self.flames -= 1
-                self.invulnerable_until = self.tick + seconds_to_ticks(TUNING["invuln_s"])
-                self.event("player_hit", id=shade.id, flames=self.flames, carried=self.carried)
-                if self.flames == 0:
-                    break
+            if shade.state in ("spawning", "stunned", "recoil"):
+                continue
+            separation = distance(self.pos, shade.pos)
+            if self.respawn_ticks or separation > 18:
+                shade.state = "wander"
+            elif separation <= 12:
+                shade.state = "chase"
+            speed = 4.5 if self.night == 3 else TUNING["shade_speed"]
+            if shade.state == "chase":
+                dx, dz = direction(shade.pos, self.pos, (0, 0))
+                self.displace_shade(shade, dx, dz, min(separation, speed * DT))
+            else:
+                dx, dz = shade.heading
+                if not self.displace_shade(shade, dx, dz, speed * DT):
+                    shade.heading = (-dz, dx)
+
+    def send_fleeing(self, drifter, duration):
+        drifter.state = "flee"
+        drifter.remaining = duration
+        drifter.heading = direction(self.pos, drifter.pos, drifter.heading)
+
+    def move_drifters(self):
+        for drifter in self.drifters:
+            if drifter.state == "flee":
+                dx, dz = direction(self.pos, drifter.pos, drifter.heading)
+                speed = 7
+            elif self.carried >= 5 and distance(self.pos, drifter.pos) <= 15:
+                drifter.state = "chase"
+                dx, dz = direction(drifter.pos, self.pos, (0, 0))
+                speed = 7
+            else:
+                drifter.state = "idle"
+                dx, dz = drifter.heading
+                speed = 2
+            x, z = drifter.pos[0] + dx * speed * DT, drifter.pos[2] + dz * speed * DT
+            if drifter.state == "idle" and ground(self.night, x, z) is None:
+                drifter.heading = (-dz, dx)
+            else:
+                drifter.pos[0], drifter.pos[2] = x, z
+
+    def collisions(self):
+        for drifter in sorted(self.drifters, key=id_order):
+            if drifter.state == "chase" and self.carried and distance(self.pos, drifter.pos) <= 1.2:
+                amount = min(3, self.carried)
+                self.carried -= amount
+                drifter.stolen = amount
+                self.send_fleeing(drifter, 240)
+                self.event("drifter_steal", drifter_id=drifter.id, amount=amount, carried=self.carried)
+        if self.invuln or not self.flames or self.zone(self.pos) is not None:
+            return
+        for shade in sorted(self.shades, key=id_order):
+            if (shade.evicting or shade.state not in ("chase", "wander")
+                    or not self.in_reach(shade.pos, TUNING["shade_hit_radius"])):
+                continue
+            self.flames -= 1
+            self.invuln = ticks(TUNING["invuln_s"])
+            shade.state = "recoil"
+            shade.remaining = RECOIL_TICKS
+            dx, dz = direction(self.pos, shade.pos, (1, 0))
+            shade.impulse = (dx * 2 / RECOIL_TICKS, dz * 2 / RECOIL_TICKS)
+            shade.impulse_ticks = RECOIL_TICKS
+            lost = math.floor(self.carried * TUNING["hit_drop_ratio"])
+            self.carried -= lost
+            self.drop(self.pos, lost, spread=True)
+            self.event("player_hit", id=shade.id, flames=self.flames, carried=self.carried)
+            break
+
+    def spawn(self):
+        if self.random_motes and len(self.motes) < 30 and self.sim_tick % MOTE_SPAWN_TICKS == 0:
+            occupied = {tuple(mote.pos) for mote in self.motes if mote.kind == "random"}
+            available = [pos for pos in self.layout.motes if pos not in occupied]
+            if available:
+                self.motes.append(Mote(self.identifier("M"), list(self.rng.choice(available))))
+        first = 5 * HZ
+        if self.random_shades and self.sim_tick >= first and (self.sim_tick - first) % (self.layout.shade_period * HZ) == 0:
+            count = 2 if self.sim_tick == first else 1
+            occupied = {(shade.pos[0], shade.pos[2]) for shade in self.shades}
+            eligible = [point for point in self.layout.mist if self.zone(point) is None
+                        and (point[0], point[2]) not in occupied
+                        and (self.night != 1 or distance(point, self.pos) >= 15)]
+            count = min(count, self.layout.max_shades - len(self.shades), len(eligible))
+            for x, y, z in self.rng.sample(eligible, max(0, count)):
+                name = self.identifier("S")
+                self.shades.append(Shade(name, [x, y + 0.8, z], "spawning", SHADE_SPAWNING_TICKS))
+                self.event("shade_spawned", id=name)
+        if self.random_drifters and self.night != 1 and self.sim_tick % 1200 == 0 and len(self.drifters) < 2:
+            x, y, z = self.rng.choice(self.layout.mist)
+            self.drifters.append(Drifter(self.identifier("D"), [x, y + 1, z],
+                                         heading=direction((0, 0, 0), (-z, 0, x))))
 
     def finish(self, state, reason):
         self.state = state
@@ -264,39 +586,68 @@ class Game:
 
     def step(self, controls):
         self.events = []
-        if self.state != "playing":
+        if self.state in ("won", "lost"):
             return self.events
         self.tick += 1
-        if self.flames == 0:
-            self.finish("lost", "no_flames")
-            return self.events
         pressed = {key: controls[key] and not self.previous[key] for key in BUTTONS}
         self.previous = controls.copy()
-        self.move(controls, pressed["jump"])
-        self.pickup()
-        if pressed["interact"]:
-            self.deposit()
-        if pressed["pulse"]:
-            self.pulse()
-        if all(lamp.lit for lamp in self.lanterns):
-            self.finish("won", "all_lanterns")
-        else:
+        if pressed["pause"]:
+            if self.state == "playing":
+                self.state = "paused"
+                self.event("paused")
+                return self.events
+            self.state = "playing"
+            self.event("resumed")
+        if self.state == "paused":
+            return self.events
+        self.sim_tick += 1
+        self.counters()
+        available = self.flames and not self.recover()
+        if available:
+            self.move(controls, pressed)
+        available = available and self.flames and not self.respawn_ticks
+        if available:
+            self.pickup()
+            if pressed["interact"]:
+                self.deposit()
+        if self.flames:
+            self.clear_zones()
+            if available and pressed["pulse"]:
+                self.pulse()
             self.move_shades()
-            if self.flames == 0 or self.time_left <= 0:
-                self.finish("lost", "no_flames" if self.flames == 0 else "timeout")
+            self.move_drifters()
+            if available:
+                self.collisions()
+            self.spawn()
+        if not self.flames:
+            self.finish("lost", "no_flames")
+        elif all(lamp.lit for lamp in self.lanterns):
+            self.finish("won", "all_lanterns")
+        elif self.time_left <= 0:
+            self.finish("lost", "dawn")
         return self.events
 
     def snapshot(self):
         return {
-            "type": "snapshot", "tick": self.tick, "sim_tick": self.tick,
+            "type": "snapshot", "night": self.night, "tick": self.tick, "sim_tick": self.sim_tick,
             "state": self.state, "time_left_s": self.time_left, "score": self.score,
-            "player": {"pos": position(self.pos), "flames": self.flames, "carried": self.carried},
-            "lanterns": [{"id": lamp.id, "pos": position(lamp.pos), "lit": lamp.lit,
-                          "deposited": lamp.deposited} for lamp in self.lanterns],
-            "shades": [{"id": shade.id, "pos": position(shade.pos), "state": shade.state}
-                       for shade in self.shades],
+            "wind": {"active": self.wind_active, "dir_deg": self.wind_angle},
+            "player": {
+                "pos": position(self.pos), "vel": position(self.vel), "grounded": self.grounded,
+                "flames": self.flames, "carried": self.carried, "invuln": bool(self.invuln),
+                "dash_cd_s": self.dash_cd / HZ, "pulse_cd_s": self.pulse_cd / HZ,
+                "charm_s": self.charm_ticks / HZ,
+            },
+            "lanterns": [{"id": l.id, "pos": position(l.pos), "lit": l.lit, "deposited": l.deposited}
+                         for l in self.lanterns],
+            "shades": [{"id": s.id, "pos": position(s.pos), "state": s.state} for s in self.shades],
             "motes_active": len(self.motes),
-            "motes": [{"id": mote.id, "pos": position(mote.pos)} for mote in self.motes],
+            "motes": [{"id": m.id, "pos": position(m.pos), "kind": m.kind,
+                       "ttl_s": None if m.ttl is None else m.ttl / HZ} for m in self.motes],
+            "drifters": [{"id": d.id, "pos": position(d.pos), "state": d.state, "stolen": d.stolen}
+                         for d in self.drifters],
+            "charms": [{"id": c.id, "available": c.available, "respawn_s": c.remaining / HZ}
+                       for c in self.charms],
         }
 
     def end(self):

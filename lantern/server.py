@@ -7,7 +7,7 @@ from threading import Lock, Timer
 import webbrowser
 
 from .contract import integer, validate_controls
-from .game import DEFAULT_INPUT, Game, ISLAND_RADIUS, ROOT, TUNING
+from .game import DEFAULT_INPUT, Game, ROOT, TUNING
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -30,6 +30,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def game_view(self, game):
+        return dict(snapshot=game.snapshot(), wind_warning=game.wind_warning)
+
     def do_POST(self):
         if self.path not in ("/api/start", "/api/step"):
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -46,15 +49,17 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("Yêu cầu phải là một JSON object")
             with self.server.game_lock:
                 if self.path == "/api/start":
+                    night = request.get("night", 1)
+                    if not integer(night, 1, 3):
+                        raise ValueError("Đêm phải là 1, 2 hoặc 3")
                     seed = self.server.seed if self.server.seed is not None else secrets.randbits(32)
                     session = request.get("session")
                     if not isinstance(session, str) or session not in self.server.games:
                         session = secrets.token_urlsafe(18)
-                    self.server.games[session] = Game(seed)
+                    game = self.server.games[session] = Game(seed, night=night)
                     if len(self.server.games) > 32:
                         del self.server.games[next(iter(self.server.games))]
-                    result = dict(session=session, snapshot=self.server.games[session].snapshot(),
-                                  tuning=TUNING, island_radius=ISLAND_RADIUS)
+                    result = dict(session=session, tuning=TUNING, layout=game.layout.view(), **self.game_view(game))
                 else:
                     session = request.get("session")
                     if not isinstance(session, str) or session not in self.server.games:
@@ -70,7 +75,7 @@ class Handler(SimpleHTTPRequestHandler):
                     events = []
                     for _ in range(ticks):
                         events.extend(game.step(controls))
-                    result = dict(snapshot=game.snapshot(), events=events)
+                    result = dict(events=events, **self.game_view(game))
         except (ValueError, OverflowError) as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return

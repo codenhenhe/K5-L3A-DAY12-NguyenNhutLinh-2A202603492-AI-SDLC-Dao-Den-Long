@@ -1,26 +1,55 @@
-:root { color-scheme: dark; font-family: "Avenir Next", system-ui, sans-serif; color: #fff5df; background: #111729; }
+:root { color-scheme: dark; font-family: "Avenir Next", system-ui, sans-serif; color: #F5F1E6; background: #0E1430; }
 * { box-sizing: border-box; }
 body { margin: 0; overflow: hidden; }
 main, canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
 .hud { position: absolute; inset: 22px 26px auto; display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; pointer-events: none; }
 .identity { display: grid; gap: 2px; text-shadow: 0 2px 12px #090e20; }
-.identity span { letter-spacing: .17em; font-size: .875rem; color: #ffdb91; font-weight: 700; }
-.identity strong { font-family: Georgia, serif; font-size: clamp(1.35rem, 3vw, 2rem); }
-.meters { display: flex; flex-wrap: wrap; gap: 2px; background: #161b31e8; border: 1px solid #e8bd7655; border-radius: 12px; padding: 8px 12px; }
-.meters div { min-width: 65px; padding: 2px 9px; display: grid; text-align: center; gap: 3px; }
-.meters span { color: #cfc4df; font-size: .875rem; }
-.meters strong { color: #ffdc97; font-variant-numeric: tabular-nums; }
-footer { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 8px 15px; padding: 10px 14px; border-radius: 10px; background: #151a30e6; color: #e9e3f4; font-size: .875rem; }
-kbd { background: #37354d; border: 1px solid #a490bc66; border-radius: 4px; padding: 1px 5px; color: #fff4dd; }
+footer { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 8px 15px; padding: 10px 14px; border-radius: 10px; background: #151a30e6; color: #F5F1E6; font-size: .875rem; }
+kbd { background: #37354d; border: 1px solid #a490bc66; border-radius: 4px; padding: 1px 5px; color: #F5F1E6; }
 #notice { position: absolute; bottom: 78px; left: 0; right: 0; margin: 0; text-align: center; font-weight: 700; text-shadow: 0 2px 8px #09101b, 0 0 13px #09101b; pointer-events: none; }
 #curtain { position: absolute; inset: 0; display: grid; place-items: center; background: #10102662; padding: 18px; }
 #curtain[hidden] { display: none; }
-.card { text-align: center; max-width: 470px; padding: 28px 32px 32px; background: #171a30f5; border: 1px solid #f1c47477; border-radius: 21px; box-shadow: 0 20px 80px #080b20b0; }
-.emblem { color: #ffce72; font-size: 2rem; text-shadow: 0 0 22px #ffaa4a; }
+.card { text-align: center; max-width: 470px; padding: 28px 32px 32px; background: #171a30f5; border: 1px solid #F2C14E; border-radius: 21px; box-shadow: 0 20px 80px #080b20b0; }
+.emblem { color: #F2C14E; font-size: 2rem; text-shadow: 0 0 22px #ffaa4a; }
 h1 { margin: 4px 0 12px; font: 700 clamp(2rem, 6vw, 3rem)/1.04 Georgia, serif; }
-.card p { line-height: 1.6; color: #e0d4e8; margin: 0 0 24px; }
+.card p { line-height: 1.6; color: #F5F1E6; margin: 0 0 24px; }
 button { border: 0; background: #ffd384; color: #282137; border-radius: 8px; font: inherit; font-weight: 750; padding: 11px 27px; cursor: pointer; }
 button:hover { background: #ffe3ad; }
 button:focus-visible { outline: 2px solid white; outline-offset: 4px; }
 button:disabled { opacity: .6; cursor: wait; }
-@media (max-width: 740px) { .hud { inset: 12px 12px auto; flex-direction: column; } .meters div { min-width: 0; padding-inline: 5px; } }
+[hidden] { display: none !important; }
+.hud { inset: 0; display: block; }
+.hud-left { position: absolute; left: 26px; top: 22px; }
+.identity { color: #ffe3a6; font-weight: 750; letter-spacing: .11em; font-size: .875rem; }
+.flames { display: flex; gap: 6px; margin-top: 7px; color: #ffbd59; font-size: 1.45rem; text-shadow: 0 0 16px #ed984d88; }
+.flames .empty { opacity: .25; }
+.clock { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: #F5F1E6; font-weight: 750; font-size: 1.9rem; letter-spacing: .05em; font-variant-numeric: tabular-nums; text-shadow: 0 3px 12px #100f23; }
+.clock.urgent { color: #FF5A5F; animation: countdown 1s ease-in-out infinite alternate; }
+@keyframes countdown { to { opacity: .48; } }
+.ledger { display: flex; position: absolute; top: 20px; right: 26px; padding: 8px 14px; gap: 16px; border: 1px solid #F2C14E; background: #161b31e8; border-radius: 12px; }
+.ledger div, .abilities div { display: grid; justify-items: center; gap: 4px; }
+.ledger span, .abilities span { color: #F5F1E6; font-size: .875rem; }
+.ledger strong, .abilities strong { color: #ffe0a0; font-variant-numeric: tabular-nums; }
+.carry { position: absolute; bottom: 65px; left: 50%; transform: translateX(-50%); display: flex; gap: 5px; background: #151a30d9; padding: 7px 10px; border-radius: 8px; }
+.carry i { width: clamp(10px, 2vw, 17px); aspect-ratio: 1; border-radius: 4px; border: 1px solid #8b806c; }
+.carry i.filled { background: #ffca62; box-shadow: 0 0 9px #ffb64c90; }
+.abilities { position: absolute; bottom: 22px; right: 26px; display: flex; align-items: flex-end; gap: 12px; padding: 8px 12px; background: #161b31e8; border: 1px solid #F2C14E; border-radius: 12px; }
+.abilities div { min-width: 64px; }
+#notice { bottom: 108px; }
+#wind { position: absolute; left: 50%; top: 65px; transform: translateX(-50%); font-weight: 700; color: #ffe0a0; text-shadow: 0 2px 8px #15162a; }
+#eyebrow { color: #F2C14E; font-size: .9rem; letter-spacing: .12em; font-weight: 700; margin-bottom: 8px; }
+#actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+button.secondary { color: #F5F1E6; background: #3a3650; }
+button.secondary:hover { background: #514863; }
+#settings { display: grid; gap: 16px; margin: 12px 0 24px; }
+#settings label { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+#settings input { accent-color: #ffd384; width: 42%; }
+#benchmark { position: absolute; bottom: 22px; left: 22px; color: #F5F1E6; padding: 6px; background: #151a30; }
+@media (max-width: 770px) {
+  .hud-left { top: 12px; left: 12px; }
+  .clock { top: 11px; font-size: 1.45rem; }
+  .ledger { top: 12px; right: 12px; padding: 5px 8px; gap: 9px; }
+  .abilities { bottom: 98px; right: 12px; }
+}
+
+#score { color: #F2C14E; }
