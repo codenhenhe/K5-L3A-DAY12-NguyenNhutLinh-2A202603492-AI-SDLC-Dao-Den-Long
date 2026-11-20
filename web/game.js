@@ -35,6 +35,7 @@ let snapshot, tuning, session;
 let layout = {islands: [[0, 0, 40]], pads: [], charms: []};
 let yaw = 0, accumulator = 0, last = 0, busy = false, running = false;
 let pulseAt = -Infinity, hitAt = -Infinity;
+let dawnAt = null;
 let facing = 0;
 let viewport = {width: 900, height: 600};
 let night = 1, screen = "menu", settingsBack = "menu", windWarning = false, previousSecond = Infinity;
@@ -177,7 +178,7 @@ function dot(x, y, size, color) {
     ctx.fill();
 }
 
-function drawSky(now) {
+function drawSky(now, dawn) {
     const {width, height} = viewport;
     const sky = ctx.createLinearGradient(0, 0, 0, height);
     for (const [at, color] of [[0, palette.sky], [.38, palette.sky], [.53, palette.fog],
@@ -186,20 +187,47 @@ function drawSky(now) {
     }
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, width, height);
-    for (const [u, v, bright] of stars) {
-        const x = (((u - yaw / TAU) % 1) + 1) % 1 * width;
-        dot(x, v * height * 0.47, bright ? 1.5 : 0.7, bright ? "#f6e5c0c7" : "#d8dcec87");
+    if (dawn > 0) {
+        const sunrise = ctx.createLinearGradient(0, 0, 0, height);
+        for (const [at, color] of [[0, "#38496d"], [.32, "#9d7894"], [.49, "#ffc38d"],
+            [.61, "#d99182"], [.77, "#655d80"], [1, "#293c55"]]) {
+            sunrise.addColorStop(at, color);
+        }
+        ctx.save();
+        ctx.globalAlpha = dawn;
+        ctx.fillStyle = sunrise;
+        ctx.fillRect(0, 0, width, height);
+        const sunX = width * .81, sunY = height * (.59 - .31 * dawn);
+        glow(sunX, sunY, height * .39, "#ffc785b8", "#ffc78500");
+        dot(sunX, sunY, Math.max(19, height * .046), "#fff4cd");
+        ctx.restore();
     }
-    const moonX = width * (0.72 - 0.16 * Math.sin(yaw)), moonY = height * 0.23;
-    glow(moonX, moonY, 112, "#ffe5b154", "#ffe5b100");
-    dot(moonX, moonY, Math.max(19, height * 0.044), "#fff1c8");
+    if (dawn < 1) {
+        if (dawn > 0) ctx.globalAlpha = 1 - dawn;
+        for (const [u, v, bright] of stars) {
+            const x = (((u - yaw / TAU) % 1) + 1) % 1 * width;
+            dot(x, v * height * 0.47, bright ? 1.5 : 0.7, bright ? "#f6e5c0c7" : "#d8dcec87");
+        }
+        const moonX = width * (0.72 - 0.16 * Math.sin(yaw)), moonY = height * 0.23;
+        glow(moonX, moonY, 112, "#ffe5b154", "#ffe5b100");
+        dot(moonX, moonY, Math.max(19, height * 0.044), "#fff1c8");
+        if (dawn > 0) ctx.globalAlpha = 1;
+    }
     for (let i = 0; i < 13; i++) {
         const x = ((width * i * 0.113 + now * (0.003 + (i % 4) * 0.001)) % (width + 240)) - 120;
         const y = height * (0.51 + (i % 4) * 0.046);
         ctx.save();
         ctx.translate(x, y);
         ctx.scale(1, 0.24);
-        glow(0, 0, 150 + (i % 3) * 42, palette.fog + "c9", palette.fog + "00");
+        const radius = 150 + (i % 3) * 42;
+        if (dawn < 1) {
+            if (dawn > 0) ctx.globalAlpha = 1 - dawn;
+            glow(0, 0, radius, palette.fog + "c9", palette.fog + "00");
+        }
+        if (dawn > 0) {
+            ctx.globalAlpha = dawn;
+            glow(0, 0, radius, "#d3a5ae96", "#d3a5ae00");
+        }
         ctx.restore();
     }
 }
@@ -454,7 +482,10 @@ function draw(now, orbit) {
     const world = snapshot || preview;
     const pos = world.player.pos;
     const cam = camera([pos[0], Math.max(0, pos[1]), pos[2]], orbit);
-    drawSky(now);
+    const progress = dawnAt === null ? 0 : settings.reducedMotion ? 1 :
+        Math.min(1, Math.max(0, (now - dawnAt) / 2600));
+    const dawn = progress * progress * (3 - 2 * progress);
+    drawSky(dawnAt !== null && settings.reducedMotion ? dawnAt : now, dawn);
     const lit = world.lanterns.filter(lamp => lamp.lit);
     drawIsland(cam, lit.length, world.lanterns.length);
     const objects = [];
@@ -523,6 +554,13 @@ function draw(now, orbit) {
     });
     queue(pos, () => drawMay(cam, pos, now));
     objects.sort((a, b) => b.depth - a.depth).forEach(object => object.drawObject());
+    if (dawn > 0) {
+        ctx.save();
+        ctx.globalAlpha = dawn;
+        glow(viewport.width * .81, viewport.height * .51, Math.max(viewport.width, viewport.height) * .63,
+            "#ffc78537", "#ffc78500");
+        ctx.restore();
+    }
     const elapsed = now - pulseAt;
     if (elapsed < 650) {
         const size = 0.35 + 5 * elapsed / 650;
@@ -784,6 +822,9 @@ function playEvents(events) {
 
 function overlay(id, title, description, buttons, eyebrow = "") {
     screen = id;
+    fields.curtain.dataset.screen = id;
+    delete fields.curtain.dataset.dawn;
+    dawnAt = null;
     running = false;
     sound.playing(false);
     fields.curtain.hidden = false;
@@ -820,6 +861,9 @@ function showMenu() {
     overlay("menu", "Đảo Đèn Lồng", "Gom đom đóm, châm dầu và giữ đảo sáng tới bình minh.",
         [["Bắt đầu", () => showIntro(1)], ["Chọn bản đồ", showMapSelect], ["Bảng xếp hạng", showLeaderboard],
             ["Cài đặt", () => showSettings("menu")]]);
+    const titleAccent = document.createElement("span");
+    titleAccent.textContent = "Đèn Lồng";
+    fields.title.replaceChildren("Đảo ", titleAccent);
 }
 
 function showMapSelect() {
@@ -914,9 +958,7 @@ function showEnd() {
         overlay("practice-result", state === "won" ? "Đảo đã sáng!" : "Đêm còn dài",
             result + " Điểm luyện tập: " + score + ".",
             [["Chơi lại Đêm", start], ["Đổi bản đồ", showMapSelect], ["Về menu", showMenu]], "LUYỆN TẬP");
-        return;
-    }
-    if (state === "won") {
+    } else if (state === "won") {
         if (night === 3) {
             overlay("dawn", "Bình Minh", "Cả ba hòn đảo đã sáng đèn. Tổng điểm: " + totalScore + ".",
                 [["Về menu", showMenu]], "ĐẢO ĐÃ SÁNG");
@@ -931,6 +973,10 @@ function showEnd() {
         overlay("result", "Đêm còn dài", reason + " Tổng điểm các Đêm đã thắng: " + totalScore + ".",
             [["Chơi lại Đêm", start], ["Về menu", showMenu]]);
         allowScoreSave();
+    }
+    if (snapshot.time_left_s <= 0) {
+        dawnAt = performance.now();
+        fields.curtain.dataset.dawn = "";
     }
 }
 

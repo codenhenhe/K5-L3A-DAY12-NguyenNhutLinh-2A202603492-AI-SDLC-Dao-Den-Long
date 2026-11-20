@@ -9,6 +9,15 @@ kbd { background: #37354d; border: 1px solid #a490bc66; border-radius: 4px; padd
 #notice { position: absolute; bottom: 78px; left: 0; right: 0; margin: 0; text-align: center; font-weight: 700; text-shadow: 0 2px 8px #09101b, 0 0 13px #09101b; pointer-events: none; }
 #curtain { position: absolute; inset: 0; display: grid; place-items: center; background: #10102662; padding: 18px; }
 #curtain[hidden] { display: none; }
+#curtain[data-dawn] { background: #10102626; }
+@media (min-width: 900px) {
+  #curtain[data-dawn] {
+    justify-items: start;
+    padding-inline: clamp(18px, 5vw, 72px);
+    background: linear-gradient(90deg, #1010268c, transparent 70%);
+  }
+  #curtain[data-dawn] .card { max-width: 520px; }
+}
 .card { text-align: center; max-width: 470px; padding: 28px 32px 32px; background: #171a30f5; border: 1px solid #F2C14E; border-radius: 21px; box-shadow: 0 20px 80px #080b20b0; }
 .emblem { color: #F2C14E; font-size: 2rem; text-shadow: 0 0 22px #ffaa4a; }
 h1 { margin: 4px 0 12px; font: 700 clamp(2rem, 6vw, 3rem)/1.04 Georgia, serif; }
@@ -89,3 +98,89 @@ button { font-weight: 750; }
 #leaderboard ol { counter-reset: place; }
 #leaderboard li::before { counter-increment: place; content: counter(place) "."; position: absolute; right: 100%; }
 @media (max-width: 630px) { #bindings { grid-template-columns: 1fr; } .mote-cells { flex-wrap: wrap; } }
+
+#curtain[data-screen="menu"] {
+  place-items: safe center start;
+  overflow: auto;
+  padding: clamp(1.25rem, 4vh, 3rem) clamp(1.25rem, 7.5vw, 8rem);
+  background:
+    linear-gradient(90deg, #080e20 0%, #080e20e8 24%, #080e2088 40%, transparent 65%),
+    url("menu-island.jpg") right center / auto 100% no-repeat #080e20;
+}
+main:has(#curtain[data-screen="menu"]:not([hidden])) #controls { display: none; }
+[data-screen="menu"] .card {
+  width: min(100%, 23rem);
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  text-align: left;
+}
+[data-screen="menu"] .emblem {
+  display: grid;
+  place-items: center;
+  width: 2.55rem;
+  height: 2.55rem;
+  margin-bottom: 1.3rem;
+  border: 1px solid #d5a7648c;
+  border-radius: 50%;
+  background: #1d1927;
+  font-size: 1.55rem;
+}
+[data-screen="menu"] h1 {
+  margin: 0 0 1rem;
+  color: #f5f1e6;
+  font-size: clamp(3.15rem, 6.5vw, 5.9rem);
+  line-height: .94;
+  letter-spacing: -.055em;
+  text-shadow: 0 3px 26px #080d19;
+}
+[data-screen="menu"] h1 span { display: block; color: #ffd384; }
+[data-screen="menu"] #description {
+  max-width: 19rem;
+  margin-bottom: 1.5rem;
+  color: #e0dcd3;
+  text-wrap: pretty;
+}
+[data-screen="menu"] #actions { display: grid; justify-content: stretch; gap: .45rem; max-width: 18rem; }
+[data-screen="menu"] #actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  min-height: 2.75rem;
+  border: 1px solid #ffe4a7;
+  border-radius: .45rem;
+  padding: .52rem .9rem;
+  background: #ffd384;
+  color: #201823;
+}
+[data-screen="menu"] #actions button:first-child::before {
+  content: "";
+  border-block: .32rem solid transparent;
+  border-left: .48rem solid currentColor;
+}
+[data-screen="menu"] #actions button:hover { background: #ffe5ae; }
+[data-screen="menu"] #actions button.secondary {
+  justify-content: flex-start;
+  border-color: #d5a7644d;
+  background: #10182beb;
+  color: #f5f1e6;
+}
+[data-screen="menu"] #actions button.secondary:hover { border-color: #d5a764; background: #222e42; }
+@media (max-width: 720px) {
+  #curtain[data-screen="menu"] {
+    place-items: safe center center;
+    padding-top: clamp(8rem, 38dvh, 18rem);
+    background:
+      linear-gradient(0deg, #080e20 46%, #080e20d9 58%, transparent 85%),
+      url("menu-island.jpg") right top / auto max(16rem, 52dvh) no-repeat #080e20;
+  }
+  [data-screen="menu"] .card { text-align: center; }
+  [data-screen="menu"] .emblem { margin-inline: auto; margin-bottom: .8rem; }
+  [data-screen="menu"] h1 { font-size: clamp(2.35rem, 9vw, 3.8rem); }
+  [data-screen="menu"] h1 span { display: inline; }
+  [data-screen="menu"] #description, [data-screen="menu"] #actions { margin-inline: auto; }
+}
