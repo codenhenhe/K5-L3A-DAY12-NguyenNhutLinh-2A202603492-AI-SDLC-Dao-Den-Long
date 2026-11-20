@@ -2,6 +2,28 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+# Phase 3 evidence used v1.2 rules. Replay the exact submitted tag on later versions.
+if ! grep -q '"contract_version": "1.2"' game.contract.json; then
+    if ! git rev-parse --verify --quiet refs/tags/phase-3 >/dev/null; then
+        echo "Fetch or check out the phase-3 tag to verify Contract v1.2." >&2
+        exit 1
+    fi
+    output_dir=
+    if [ "$#" -gt 0 ]; then
+        mkdir -p "$1"
+        output_dir=$(cd "$1" && pwd)
+    fi
+    legacy=$(mktemp -d)
+    trap 'rm -rf "$legacy"' EXIT
+    git archive --format=tar --output="$legacy/source.tar" refs/tags/phase-3
+    tar -xf "$legacy/source.tar" -C "$legacy"
+    if [ -n "$output_dir" ]; then
+        sh "$legacy/scripts/verify-phase-3.sh" "$output_dir"
+    else
+        sh "$legacy/scripts/verify-phase-3.sh"
+    fi
+    exit
+fi
 output_dir=${1:-$(mktemp -d)}
 mkdir -p "$output_dir"
 python3 -m compileall -q lantern

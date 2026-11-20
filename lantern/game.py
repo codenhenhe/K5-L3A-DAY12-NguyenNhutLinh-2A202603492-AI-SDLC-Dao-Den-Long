@@ -568,6 +568,16 @@ class Game:
         shade.pos = [x, shade.pos[1] if floor == previous_floor else floor + 0.8, z]
         return True
 
+    def wander_shade(self, shade, speed):
+        target = self.nearest_lantern(shade.pos, (lamp for lamp in self.lanterns if not lamp.lit))
+        if target is not None:
+            dx, dz = direction(shade.pos, target.pos, (0, 0))
+            self.displace_shade(shade, dx, dz, min(distance(shade.pos, target.pos), speed * DT))
+        else:
+            dx, dz = shade.heading
+            if not self.displace_shade(shade, dx, dz, speed * DT):
+                shade.heading = (-dz, dx)
+
     def move_shades(self):
         for shade in self.shades:
             separation = distance(self.pos, shade.pos)
@@ -622,14 +632,7 @@ class Game:
                 dx, dz = direction(shade.pos, self.pos, (0, 0))
                 self.displace_shade(shade, dx, dz, min(separation, speed * DT))
                 continue
-            target = self.nearest_lantern(shade.pos, (lamp for lamp in self.lanterns if not lamp.lit))
-            if target is None:
-                dx, dz = shade.heading
-                if not self.displace_shade(shade, dx, dz, speed * DT):
-                    shade.heading = (-dz, dx)
-                continue
-            dx, dz = direction(shade.pos, target.pos, (0, 0))
-            self.displace_shade(shade, dx, dz, min(distance(shade.pos, target.pos), speed * DT))
+            self.wander_shade(shade, speed)
 
     @staticmethod
     def start_drain(shade, lamp):

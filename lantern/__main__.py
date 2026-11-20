@@ -57,10 +57,43 @@ def main():
     cli_play.add_argument("--port", type=int, default=8765)
     cli_play.add_argument("--no-browser", action="store_true")
     cli_play.add_argument("--seed", type=int)
+    cli_play.add_argument("--export-leaderboard")
+    cli_bench = commands.add_parser("bench")
+    cli_bench.add_argument("--seed", type=int, required=True)
+    cli_bench.add_argument("--duration", type=float, required=True)
+    cli_bench.add_argument("--out", required=True)
+    cli_soak = commands.add_parser("soak")
+    cli_soak.add_argument("--seed", type=int, required=True)
+    cli_soak.add_argument("--nights", type=int, required=True)
+    cli_soak.add_argument("--out", required=True)
     args = cli.parse_args()
     if args.command == "play":
+        if args.export_leaderboard:
+            import sqlite3
+            from .leaderboard import export
+            try:
+                export(args.export_leaderboard)
+                return 0
+            except (OSError, sqlite3.Error) as error:
+                print(error, file=sys.stderr)
+                return 1
         from .server import play
         return play(args.port, args.no_browser, args.seed)
+    if args.command == "soak":
+        if args.nights < 1:
+            cli_soak.error("--nights must be positive")
+        from .soak import soak
+        try:
+            return soak(args.seed, args.nights, args.out)
+        except OSError as error:
+            print(error, file=sys.stderr)
+            return 1
+    if args.command == "bench":
+        from math import isfinite
+        if not isfinite(args.duration) or args.duration <= 0:
+            cli_bench.error("--duration must be positive and finite")
+        from .benchmark import benchmark
+        return benchmark(args.seed, args.duration, args.out)
     if args.ticks < 0 or args.snapshot_every <= 0:
         cli_headless.error("expected --ticks >= 0 and --snapshot-every > 0")
     return headless(args)

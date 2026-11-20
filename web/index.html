@@ -16,6 +16,7 @@
       <div class="hud-left">
         <div class="identity" id="night-label">ĐÊM 1 · ĐẢO BẾN</div>
         <div class="flames" id="flames" aria-label="Ngọn lửa"></div>
+        <div id="terrain-level" hidden></div>
       </div>
       <div class="clock" id="time" aria-label="Thời gian"></div>
       <div class="ledger">
@@ -27,19 +28,20 @@
         <strong id="carry-count"></strong>
       </div>
       <div class="abilities">
-        <div><kbd>Shift</kbd><span>Lướt</span><strong id="dash-cd"></strong></div>
-        <div><kbd>F</kbd><span>Tỏa sáng</span><strong id="pulse-cd"></strong></div>
+        <div><kbd id="dash-key">Shift</kbd><span>Lướt</span><strong id="dash-cd"></strong></div>
+        <div><kbd id="pulse-key">F</kbd><span>Tỏa sáng</span><strong id="pulse-cd"></strong></div>
         <span id="charm-timer" hidden></span>
       </div>
       <p id="wind" class="urgent" role="status" hidden></p>
+      <p id="caption" class="urgent" role="status" hidden></p>
       <p id="notice" role="status"></p>
     </div>
     <footer id="controls">
-      <span><kbd>WASD</kbd> Di chuyển</span>
+      <span><kbd id="move-keys">WASD</kbd> Di chuyển</span>
       <span><kbd>← →</kbd> hoặc kéo chuột</span>
-      <span><kbd>Space</kbd> Nhảy</span>
-      <span><kbd>E</kbd> Nạp đèn</span>
-      <span><kbd>Esc / P</kbd> Tạm dừng</span>
+      <span><kbd id="jump-key">Space</kbd> Nhảy</span>
+      <span><kbd id="interact-key">E</kbd> Nạp đèn</span>
+      <span><kbd id="pause-key">Esc / P</kbd> Tạm dừng</span>
     </footer>
     <section id="curtain" aria-labelledby="title">
       <div class="card">
@@ -51,7 +53,23 @@
           <label>Âm lượng <input id="volume" type="range" min="0" max="1" step=".05"></label>
           <label>Độ nhạy chuột <input id="sensitivity" type="range" min=".25" max="2.5" step=".05"></label>
           <label>Bảng màu dễ phân biệt <input id="accessiblePalette" type="checkbox"></label>
+          <label>Giảm chuyển động <input id="reducedMotion" type="checkbox"></label>
+          <label>Chữ lớn <input id="largeText" type="checkbox"></label>
+          <details id="key-settings">
+            <summary>Đổi phím</summary>
+            <div id="bindings"></div>
+            <p id="binding-status" role="status"></p>
+            <button id="reset-bindings" type="button" class="secondary">Khôi phục mặc định</button>
+          </details>
         </div>
+        <form id="score-form" hidden>
+          <label for="player-name">Tên trên bảng xếp hạng</label>
+          <div><input id="player-name" name="name" maxlength="12" pattern="[A-Za-z0-9_]{3,12}"
+              autocomplete="off" placeholder="3–12 ký tự" required>
+            <button type="submit">Lưu điểm</button></div>
+          <p id="save-status" role="status"></p>
+        </form>
+        <div id="leaderboard" hidden></div>
         <div id="actions"><button type="button">Bắt đầu</button></div>
       </div>
     </section>

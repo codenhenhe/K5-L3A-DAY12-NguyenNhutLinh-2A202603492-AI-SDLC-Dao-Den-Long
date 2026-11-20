@@ -4,11 +4,15 @@ const canvas = document.querySelector("#island");
 const ctx = canvas.getContext("2d");
 const fields = Object.fromEntries(["flames", "motes", "lamps", "time", "score", "notice", "curtain", "title",
     "description", "hud", "actions", "eyebrow", "settings", "volume", "sensitivity", "night-label",
-    "dash-cd", "pulse-cd", "wind", "charm-timer", "benchmark", "controls", "accessiblePalette", "carry-count", "dawn-goal"]
+    "dash-cd", "pulse-cd", "wind", "charm-timer", "benchmark", "controls", "accessiblePalette", "carry-count", "dawn-goal",
+    "reducedMotion", "largeText", "bindings", "binding-status", "reset-bindings", "move-keys", "jump-key", "interact-key",
+    "pause-key", "dash-key", "pulse-key", "key-settings", "caption", "score-form", "player-name", "save-status", "leaderboard",
+    "terrain-level"]
     .map(id => [id, document.getElementById(id)]));
 
 const STEP = 1000 / 60;
 const TAU = 2 * Math.PI;
+const benchMode = new URLSearchParams(location.search).has("bench-run");
 const palette = {
     sky: "#0E1430", fog: "#1B2350",
     grass: "#2F5D50", sand: "#C9B48A", wood: "#6B4A2F", cloudSea: "#12384A",
@@ -17,9 +21,14 @@ const palette = {
     shade: "#120A1A", shadeOutline: "#7A3CFF", shadeStunned: "#3A3450",
     mayShirt: "#E8E2D0", red: "#C8102E", gold: "#F2C14E", drifter: "#8FA3B8",
 };
-const actions = {jump: ["Space"], interact: ["KeyE"], pulse: ["KeyF"],
+const defaultBindings = {forward: ["KeyW"], left: ["KeyA"], back: ["KeyS"], right: ["KeyD"],
+    jump: ["Space"], interact: ["KeyE"], pulse: ["KeyF"],
     dash: ["ShiftLeft", "ShiftRight"], pause: ["Escape", "KeyP"]};
-const bound = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowLeft", "ArrowRight", ...Object.values(actions).flat()]);
+const labels = {forward: "Đi tới", left: "Đi trái", back: "Đi lui", right: "Đi phải", jump: "Nhảy",
+    dash: "Lướt", interact: "Tương tác", pulse: "Tỏa sáng", pause: "Tạm dừng"};
+const cameraKeys = ["ArrowLeft", "ArrowRight"];
+const actions = ["jump", "interact", "pulse", "dash", "pause"];
+let bindings = {...defaultBindings}, editingBinding = null;
 const keys = new Set();
 const latched = new Set();
 let snapshot, tuning, session;
@@ -29,8 +38,9 @@ let pulseAt = -Infinity, hitAt = -Infinity;
 let facing = 0;
 let viewport = {width: 900, height: 600};
 let night = 1, screen = "menu", settingsBack = "menu", windWarning = false, previousSecond = Infinity;
-let totalScore = 0;
+let totalScore = 0, practice = false;
 let lowFuel = new Set(), receivingLanterns = new Set(), requiredLights = 0;
+let spawnHints = new Map();
 const nights = [
     {name: "Đảo Bến", quote: "Khi dầu cạn, đèn sẽ tắt. Châm dầu hoặc thắp lại để giữ đảo sáng tới bình minh."},
     {name: "Đảo Sương", quote: "Cầu tre nối hai bờ. Nếu gặp Gió Lạc, hãy giữ ánh sáng thật gần."},
@@ -54,8 +64,9 @@ const rocks = Array.from({length: 133}, (_, i) => {
 });
 
 function resize() {
-    const scale = Math.min(devicePixelRatio || 1, 2);
-    viewport = {width: canvas.clientWidth, height: canvas.clientHeight};
+    const scale = benchMode ? 1 : Math.min(devicePixelRatio || 1, 2);
+    viewport = benchMode ? {width: 1280, height: 720} :
+        {width: canvas.clientWidth, height: canvas.clientHeight};
     canvas.width = Math.max(1, Math.round(viewport.width * scale));
     canvas.height = Math.max(1, Math.round(viewport.height * scale));
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
@@ -73,16 +84,22 @@ function polygon(points, color) {
     ctx.fill();
 }
 
-function camera(player) {
-    const forward = [Math.sin(yaw), Math.cos(yaw)];
-    const distanceBack = 9.6, height = 6.2;
+function camera(player, orbit) {
+    const forward = orbit === undefined ? [Math.sin(yaw), Math.cos(yaw)] :
+        [-Math.cos(orbit), -Math.sin(orbit)];
+    const terraceView = orbit === undefined && night === 3;
+    const distanceBack = terraceView ? 12 : 9.6, height = terraceView ? 9.4 : 6.2;
     const shoulder = 1.25;
-    const origin = [player[0] - forward[0] * distanceBack + forward[1] * shoulder,
-        player[1] + height, player[2] - forward[1] * distanceBack - forward[0] * shoulder];
-    const pitch = 0.38;
+    const origin = orbit === undefined ?
+        [player[0] - forward[0] * distanceBack + forward[1] * shoulder,
+            player[1] + height, player[2] - forward[1] * distanceBack - forward[0] * shoulder] :
+        [30 * Math.cos(orbit), 15, 30 * Math.sin(orbit)];
+    const pitch = orbit === undefined ? (terraceView ? .39 : .38) : Math.atan2(15, 30);
     const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
-    const focal = viewport.height * 0.96;
-    const cx = viewport.width / 2, cy = viewport.height * 0.49;
+    const focal = viewport.height * (terraceView ? .72 : .96);
+    const shake = orbit === undefined && !settings.reducedMotion ? Math.max(0, 1 - (performance.now() - hitAt) / 320) : 0;
+    const cx = viewport.width / 2 + shake * Math.sin(performance.now() / 18) * 7,
+        cy = viewport.height * (orbit === undefined ? .49 : .5);
     function local([x, y, z]) {
         const dx = x - origin[0], dy = y - origin[1], dz = z - origin[2];
         const ahead = dx * forward[0] + dz * forward[1];
@@ -135,13 +152,22 @@ function frustum(cam, [x, y, z], from, to, height, colors, edges = 8, angle = 0)
     solid(cam, ring([x, y, z], from, edges, angle), ring([x, y + height, z], to, edges, angle), colors);
 }
 
+const glows = new Map();
 function glow(x, y, size, from, edge) {
     if (size <= 0 || !Number.isFinite(size)) return;
-    const grad = ctx.createRadialGradient(x, y, 0, x, y, size);
-    grad.addColorStop(0, from);
-    grad.addColorStop(1, edge);
-    ctx.fillStyle = grad;
-    ctx.fillRect(x - size, y - size, size * 2, size * 2);
+    const key = from + edge;
+    if (!glows.has(key)) {
+        const picture = document.createElement("canvas");
+        picture.width = picture.height = 128;
+        const paint = picture.getContext("2d");
+        const grad = paint.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, from);
+        grad.addColorStop(1, edge);
+        paint.fillStyle = grad;
+        paint.fillRect(0, 0, 128, 128);
+        glows.set(key, picture);
+    }
+    ctx.drawImage(glows.get(key), x - size, y - size, size * 2, size * 2);
 }
 
 function dot(x, y, size, color) {
@@ -200,31 +226,102 @@ function drawIsland(cam, lit, count) {
             cam.worldPolygon([[i, 0.03, -2], [end, 0.03, -2], [end, 0.03, 2], [i, 0.03, 2]],
                 Math.floor(i * 3) % 2 ? palette.wood : "#745033");
         }
-    } else if (night === 3) {
-        const arc = (r, y, start, end) => Array.from({length: 25}, (_, i) => {
-            const a = start + (end - start) * i / 24;
-            return [r * Math.cos(a), y, r * Math.sin(a)];
-        });
-        const outer = arc(24, 3, 0, Math.PI);
-        const inner = arc(12, 3, Math.PI, 0);
-        for (const edge of [outer, inner]) {
-            for (let i = 0; i < edge.length - 1; i++) {
-                const a = edge[i], b = edge[i + 1];
-                cam.worldPolygon([a, b, [b[0], 0, b[2]], [a[0], 0, a[2]]], i % 2 ? "#4f4759" : "#514a60");
-            }
-        }
-        cam.worldPolygon([...outer, ...inner], grass);
-        for (const angle of [30, 150]) {
-            const a = angle * Math.PI / 180, x = Math.cos(a), z = Math.sin(a);
-            const at = (radius, side, y) => [x * radius - z * side, y, z * radius + x * side];
-            cam.worldPolygon([at(24, -1.5, 3), at(24, 1.5, 3), at(30, 1.5, 0.02), at(30, -1.5, 0.02)], palette.wood);
-        }
-        solid(cam, ring([0, 0, 0], 8, 32), ring([0, 6, 0], 8, 32), ["#4f4757", "#5b5160", grass]);
     }
-    for (const [x, y, z] of layout.pads) {
-        cam.worldPolygon(ring([x, y + 0.025, z], 1, 14), "#d19353");
-        cam.worldPolygon(ring([x, y + 0.035, z], 0.75, 4), "#f0bd6a");
+    if (night !== 3) {
+        for (const [x, y, z] of layout.pads) {
+            cam.worldPolygon(ring([x, y + 0.025, z], 1, 14), "#d19353");
+            cam.worldPolygon(ring([x, y + 0.035, z], 0.75, 4), "#f0bd6a");
+        }
     }
+}
+
+function makeTerraces() {
+    const faces = [];
+    function add(vertices, color) {
+        const face = {vertices, color, details: []};
+        faces.push(face);
+        return face;
+    }
+    function polar(radius, height, angle) {
+        return [radius * Math.cos(angle), height, radius * Math.sin(angle)];
+    }
+    function strip(inner, outer, height, a, b) {
+        return [polar(inner, height, a), polar(outer, height, a),
+            polar(outer, height, b), polar(inner, height, b)];
+    }
+    function wall(a, b, top, stone, stripe) {
+        const level = ([x, , z], y) => [x, y, z];
+        const panel = (low, high, color) => add([level(a, low), level(b, low), level(b, high), level(a, high)], color);
+        panel(0, top * .63, stone);
+        panel(top * .63, top * .69, stripe);
+        panel(top * .69, top, stone);
+    }
+
+    for (let i = 0; i < 32; i++) {
+        const a = i * Math.PI / 32, b = (i + 1) * Math.PI / 32;
+        const inside = [polar(12, 3, a), polar(12, 3, b)];
+        const outside = [polar(24, 3, a), polar(24, 3, b)];
+        for (let radius = 12; radius < 24; radius += 2) {
+            const tile = add(strip(radius, radius + 2, 3, a, b), i % 2 ? "#346456" : "#315f53");
+            if (radius === 12) tile.details.push([strip(12, 12.28, 3, a, b), "#9aa892"]);
+            if (radius === 22) tile.details.push([strip(23.72, 24, 3, a, b), "#9aa892"]);
+        }
+        wall(...inside, 3, i % 2 ? "#484957" : "#535264", "#726778");
+        // Both ramps meet the outer rim at deck height.
+        wall(...outside, 3, i % 2 ? "#535264" : "#5c596b", "#807286");
+    }
+    for (const angle of [0, Math.PI]) {
+        wall(polar(12, 3, angle), polar(24, 3, angle), 3, "#535264", "#807286");
+    }
+
+    for (let i = 0; i < 36; i++) {
+        const a = i * TAU / 36, b = (i + 1) * TAU / 36;
+        const p = polar(8, 6, a), q = polar(8, 6, b);
+        wall(p, q, 6, i % 2 ? "#605267" : "#695971", "#a38b9b");
+        for (let radius = 0; radius < 8; radius += 2) {
+            const tile = add(strip(radius, radius + 2, 6, a, b), i % 2 ? "#626b58" : "#66705d");
+            if (radius === 6) tile.details.push([strip(7.63, 8, 6, a, b), "#edc27b"]);
+        }
+    }
+
+    for (const angle of [30, 150]) {
+        const theta = angle * Math.PI / 180, x = Math.cos(theta), z = Math.sin(theta);
+        const at = (r, side, y = Math.min(3, (30 - r) / 2) + .025) =>
+            [x * r - z * side, y, z * r + x * side];
+        function deck(inner, outer, left, right) {
+            return [at(inner, left), at(inner, right), at(outer, right), at(outer, left)];
+        }
+        function arrow(r) {
+            const mark = (d, side) => at(r + d, side, Math.max(0, (30 - r - d) / 2) + .038);
+            return [mark(-.24, 0), mark(.22, -.62), mark(.10, 0), mark(.22, .62)];
+        }
+        for (const side of [-1.5, 1.5]) {
+            add([at(24, side, 0), at(30, side, 0), at(24, side)], "#514759");
+        }
+        for (let i = 0; i < 12; i++) {
+            const r = 24 + i * .5;
+            const tile = add(deck(r, r + .5, -1.5, 1.5), i % 2 ? "#745033" : palette.wood);
+            tile.details.push([deck(r, r + .5, -1.5, -1.28), "#d4a453"],
+                [deck(r, r + .5, 1.28, 1.5), "#d4a453"]);
+            if (i % 4 === 2) tile.details.push([arrow(r + .25), "#ffdfa3"]);
+        }
+        for (const r of [31.25, 33.3]) add(arrow(r), "#ffdfa3");
+    }
+    return faces;
+}
+
+const terraceFaces = makeTerraces();
+
+function drawTerracePad(cam, pos) {
+    const [x, y, z] = pos;
+    cam.worldPolygon(ring([x, y + .025, z], 1, 24), "#73c9c1");
+    cam.worldPolygon(ring([x, y + .035, z], .83, 24), "#345f73");
+    cam.worldPolygon([
+        [x, y + .045, z - .73], [x + .61, y + .045, z - .06],
+        [x + .25, y + .045, z - .09], [x + .25, y + .045, z + .55],
+        [x - .25, y + .045, z + .55], [x - .25, y + .045, z - .09],
+        [x - .61, y + .045, z - .06]
+    ], "#cafcf1");
 }
 
 function drawPlant(cam, plant) {
@@ -353,30 +450,56 @@ function drawMay(cam, pos, now) {
     }
 }
 
-function draw(now) {
+function draw(now, orbit) {
     const world = snapshot || preview;
     const pos = world.player.pos;
-    const cam = camera([pos[0], Math.max(0, pos[1]), pos[2]]);
+    const cam = camera([pos[0], Math.max(0, pos[1]), pos[2]], orbit);
     drawSky(now);
     const lit = world.lanterns.filter(lamp => lamp.lit);
     drawIsland(cam, lit.length, world.lanterns.length);
-    for (const lamp of lit) {
-        const place = cam.project(lamp.pos);
-        if (place) {
-            ctx.save();
-            ctx.globalAlpha *= flicker(lamp, now);
-            ctx.translate(place[0], place[1]);
-            ctx.scale(1, 0.40);
-            glow(0, 0, Math.min(350, place[2] * 4.6), "#ffc36571", "#ef9e4200");
-            ctx.restore();
-        }
-    }
     const objects = [];
     const queue = (point, drawObject) => {
         const depth = cam.local(point)[2];
         const at = cam.project(point);
         if (at && at[0] > -250 && at[0] < viewport.width + 250) objects.push({depth, drawObject});
     };
+    if (night === 3) {
+        for (const {vertices, color, details} of terraceFaces) {
+            const depths = vertices.map(point => cam.local(point)[2]);
+            if (depths.every(depth => depth <= .2)) continue;
+            const depth = depths.reduce((sum, value) => sum + value, 0) / depths.length;
+            objects.push({depth, drawObject: () => {
+                cam.worldPolygon(vertices, color);
+                for (const [points, fill] of details) cam.worldPolygon(points, fill);
+            }});
+        }
+        const cadence = settings.reducedMotion ? 0 : (now % 1800) / 1800;
+        for (const pad of layout.pads) {
+            const [x, y, z] = pad;
+            queue(pad, () => drawTerracePad(cam, pad));
+            for (let i = 1; i <= 7; i++) {
+                const t = (i + cadence) / 8 * .84;
+                const point = [x, y + 12 * t - 10 * t * t, z - 8 * t];
+                const at = cam.project(point);
+                if (at) queue(point, () => dot(at[0], at[1], i % 2 ? 2.5 : 3.5,
+                    i % 2 ? "#91d9dca0" : "#b7eeeac0"));
+            }
+        }
+    }
+    for (const lamp of lit) {
+        const place = cam.project(lamp.pos);
+        if (!place) continue;
+        const drawGroundGlow = () => {
+            ctx.save();
+            ctx.globalAlpha *= flicker(lamp, now);
+            ctx.translate(place[0], place[1]);
+            ctx.scale(1, 0.40);
+            glow(0, 0, Math.min(350, place[2] * 4.6), "#ffc36571", "#ef9e4200");
+            ctx.restore();
+        };
+        if (night === 3) queue(lamp.pos, drawGroundGlow);
+        else drawGroundGlow();
+    }
     for (const [x, z, radius] of layout.islands) {
         for (const plant of plants) {
             const [px, , pz] = plant.pos;
@@ -410,12 +533,19 @@ function draw(now) {
             cam.worldPolygon([outer[i], outer[j], inner[j], inner[i]], "rgba(255,209,114," + (1 - elapsed / 650) + ")");
         }
     }
-    if (now - hitAt < 350) {
+    if (!settings.reducedMotion && now - hitAt < 350) {
         ctx.fillStyle = "rgba(108,52,150," + (0.26 * (1 - (now - hitAt) / 350)) + ")";
         ctx.fillRect(0, 0, viewport.width, viewport.height);
     }
     if (running) {
         drawGuide(cam, world);
+        for (const [id, hint] of spawnHints) {
+            if (now >= hint.until) spawnHints.delete(id);
+            else {
+                const shade = world.shades.find(item => item.id === id);
+                if (shade) drawArrow(cam, shade.pos, true);
+            }
+        }
         if (world.wind.active || windWarning) drawLeaves(now, world.wind.dir_deg);
     }
 }
@@ -437,18 +567,24 @@ function drawGuide(cam, world) {
     const target = nearestLantern(world);
     if (!target) return;
     const [x, y, z] = target.pos;
-    const at = cam.project([x, y + 3, z]);
+    drawArrow(cam, [x, y + 3, z], false);
+}
+
+function drawArrow(cam, point, danger) {
+    const at = cam.project(point);
     const {width, height} = viewport;
-    if (at && at[0] >= 0 && at[0] <= width && at[1] >= 0 && at[1] <= height) return;
-    const [side, up, ahead] = cam.local([x, y + 3, z]);
-    const angle = ahead < 0 ? (side < 0 ? -2.3 : 2.3) : Math.atan2(side, up);
+    if (!danger && at && at[0] >= 0 && at[0] <= width && at[1] >= 0 && at[1] <= height) return;
+    const [side, up, ahead] = cam.local(point);
+    const angle = ahead < 0 ? (side < 0 ? -2.3 : 2.3) :
+        danger ? Math.atan2(side, Math.max(.25, ahead)) : Math.atan2(side, up);
     const px = width / 2 + Math.sin(angle) * (width / 2 - 45);
-    const py = height / 2 - Math.cos(angle) * Math.max(50, height / 2 - 125);
+    const py = height / 2 - Math.cos(angle) * Math.max(50, height / 2 - (danger ? 45 : 125));
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(angle);
     dot(0, 0, 17, "#24213ce8");
-    polygon([[0, -12], [8, 6], [0, 3], [-8, 6]], "#ffe1a0");
+    polygon([[0, -12], [8, 6], [0, 3], [-8, 6]], danger ?
+        settings.accessiblePalette ? "#FFFFFF" : "#FF5A5F" : "#ffe1a0");
     ctx.restore();
 }
 
@@ -466,27 +602,92 @@ function drawLeaves(now, directionDeg) {
     ctx.restore();
 }
 
-const settings = {volume: .45, sensitivity: 1, accessiblePalette: false};
+const settings = {volume: .45, sensitivity: 1, accessiblePalette: false,
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches, largeText: false};
 try {
     const saved = JSON.parse(localStorage.getItem("lantern-settings"));
     for (const [key, min, max] of [["volume", 0, 1], ["sensitivity", .25, 2.5]]) {
         if (Number.isFinite(saved?.[key])) settings[key] = Math.min(max, Math.max(min, saved[key]));
     }
     settings.accessiblePalette = saved?.accessiblePalette === true;
+    if (typeof saved?.reducedMotion === "boolean") settings.reducedMotion = saved.reducedMotion;
+    settings.largeText = saved?.largeText === true;
+    if (validBindings(saved?.bindings)) bindings = saved.bindings;
 } catch { /* Storage may be disabled by browser preferences. */ }
-sound.gain(settings.volume);
-document.body.classList.toggle("accessible-palette", settings.accessiblePalette);
+function validBindings(candidate) {
+    if (!candidate) return false;
+    const used = new Set(cameraKeys);
+    return Object.keys(defaultBindings).every(action => {
+        const codes = candidate[action];
+        return Array.isArray(codes) && codes.length >= 1 && codes.every(code => {
+            if (typeof code !== "string" || !code || used.has(code)) return false;
+            used.add(code);
+            return true;
+        });
+    });
+}
+
+function saveSettings() {
+    try { localStorage.setItem("lantern-settings", JSON.stringify({...settings, bindings})); } catch {}
+}
+
+function applySettings() {
+    sound.gain(settings.volume);
+    document.body.classList.toggle("accessible-palette", settings.accessiblePalette);
+    document.body.classList.toggle("reduced-motion", settings.reducedMotion);
+    document.documentElement.classList.toggle("large-text", settings.largeText);
+}
+
+applySettings();
 for (const key of Object.keys(settings)) {
     const input = fields[key];
     if (input.type === "checkbox") input.checked = settings[key];
     else input.value = settings[key];
     input.addEventListener("input", () => {
         settings[key] = input.type === "checkbox" ? input.checked : Number(input.value);
-        document.body.classList.toggle("accessible-palette", settings.accessiblePalette);
-        sound.gain(settings.volume);
-        try { localStorage.setItem("lantern-settings", JSON.stringify(settings)); } catch {}
+        applySettings();
+        saveSettings();
     });
 }
+
+function keyLabel(code) {
+    return code.replace(/^Key|^Digit/, "").replace(/^Shift(?:Left|Right)$/, "Shift")
+        .replace("Escape", "Esc").replace("Arrow", "Mũi tên ");
+}
+
+function currentKeys(action) {
+    return [...new Set(bindings[action].map(keyLabel))].join(" / ");
+}
+
+function bindingRows() {
+    fields.bindings.replaceChildren(...Object.keys(labels).map(action => {
+        const row = document.createElement("div");
+        const label = document.createElement("span");
+        label.textContent = labels[action];
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary";
+        button.textContent = currentKeys(action);
+        button.setAttribute("aria-label", "Đổi phím " + labels[action]);
+        button.addEventListener("click", () => {
+            editingBinding = action;
+            setText(fields["binding-status"], "Nhấn phím mới cho " + labels[action] + ".");
+        });
+        row.append(label, button);
+        return row;
+    }));
+    setText(fields["move-keys"], ["forward", "left", "back", "right"].map(currentKeys).join(" "));
+    for (const action of actions) setText(fields[action + "-key"], currentKeys(action));
+}
+
+fields["reset-bindings"].addEventListener("click", () => {
+    bindings = {...defaultBindings};
+    editingBinding = null;
+    bindingRows();
+    saveSettings();
+    setText(fields["binding-status"], "Đã khôi phục mặc định.");
+});
+bindingRows();
 
 function setText(field, value) {
     if (field.textContent !== String(value)) field.textContent = value;
@@ -494,6 +695,18 @@ function setText(field, value) {
 
 function updateHUD() {
     const {player, lanterns, score, time_left_s: time, wind} = snapshot;
+    const level = fields["terrain-level"];
+    level.hidden = snapshot.night !== 3;
+    if (!level.hidden) {
+        const height = player.pos[1];
+        let place = "Trên không";
+        if (height < 0) place = "Ngoài rìa đảo";
+        else if (player.grounded) {
+            if (height === 0 || height === 3 || height === 6) place = "Tầng " + height / 3;
+            else place = "Đường dốc";
+        }
+        setText(level, place + " · " + height.toFixed(1).replace(".", ",") + " m");
+    }
     if (fields.flames.children.length !== tuning.flames) {
         fields.flames.replaceChildren(...Array.from({length: tuning.flames}, () => {
             const icon = document.createElement("span");
@@ -535,6 +748,13 @@ function updateHUD() {
     fields.notice.classList.toggle("urgent", running && lowFuel.has(nearby?.id));
     fields.wind.hidden = !wind.active && !windWarning;
     setText(fields.wind, wind.active ? "Gió mạnh" : "Gió mạnh sắp đến");
+    const captions = [];
+    const now = performance.now();
+    if ([...spawnHints.values()].some(hint => hint.until > now)) captions.push("Bóng Mực xuất hiện");
+    if (seconds > 0 && seconds <= 10) captions.push("10 giây cuối");
+    if (lowFuel.size) captions.push("Đèn yếu: " + [...lowFuel].join(", "));
+    fields.caption.hidden = captions.length === 0;
+    setText(fields.caption, captions.join(" · "));
 }
 
 async function request(path, data) {
@@ -548,6 +768,7 @@ async function request(path, data) {
 
 function applyGameView(result) {
     ({snapshot, wind_warning: windWarning, required_lights: requiredLights} = result);
+    totalScore = result.campaign.score;
     lowFuel = new Set(result.low_fuel);
     receivingLanterns = new Set(result.receiving_lanterns);
 }
@@ -557,6 +778,7 @@ function playEvents(events) {
         sound.effect(event.name === "game_over" ? "game_" + event.data.state : event.name);
         if (event.name === "pulse") pulseAt = performance.now();
         if (event.name === "player_hit") hitAt = performance.now();
+        if (event.name === "shade_spawned") spawnHints.set(event.data.id, {until: performance.now() + 3900});
     }
 }
 
@@ -566,6 +788,9 @@ function overlay(id, title, description, buttons, eyebrow = "") {
     sound.playing(false);
     fields.curtain.hidden = false;
     fields.settings.hidden = id !== "settings";
+    fields.leaderboard.hidden = id !== "leaderboard";
+    fields["score-form"].hidden = true;
+    editingBinding = null;
     fields.eyebrow.hidden = !eyebrow;
     fields.description.hidden = !description;
     setText(fields.eyebrow, eyebrow);
@@ -584,15 +809,79 @@ function overlay(id, title, description, buttons, eyebrow = "") {
 
 function showMenu() {
     snapshot = null;
+    session = null;
     lowFuel.clear();
     night = 1;
+    practice = false;
     totalScore = 0;
     yaw = 0;
     layout = {islands: [[0, 0, 40]], pads: [], charms: []};
     fields.hud.hidden = true;
     overlay("menu", "Đảo Đèn Lồng", "Gom đom đóm, châm dầu và giữ đảo sáng tới bình minh.",
-        [["Bắt đầu", () => showIntro(1)], ["Cài đặt", () => showSettings("menu")]]);
+        [["Bắt đầu", () => showIntro(1)], ["Chọn bản đồ", showMapSelect], ["Bảng xếp hạng", showLeaderboard],
+            ["Cài đặt", () => showSettings("menu")]]);
 }
+
+function showMapSelect() {
+    if (busy) return;
+    const maps = nights.map((map, index) => ["Đêm " + (index + 1) + " · " + map.name, () => {
+        if (busy) return;
+        session = null;
+        practice = true;
+        night = index + 1;
+        start();
+    }]);
+    fields.hud.hidden = true;
+    overlay("maps", "Chọn bản đồ", "Chơi riêng một Đêm để luyện tập. Điểm luyện tập không vào bảng xếp hạng.",
+        [...maps, ["Về menu", showMenu]]);
+}
+
+async function showLeaderboard() {
+    overlay("leaderboard", "Bảng xếp hạng", "", [["Về menu", showMenu]]);
+    setText(fields.leaderboard, "Đang tải…");
+    try {
+        const response = await fetch("/api/leaderboard");
+        const {entries, error} = await response.json();
+        if (!response.ok) throw new Error(error || "Không đọc được bảng xếp hạng.");
+        if (!entries.length) {
+            setText(fields.leaderboard, "Chưa có điểm được lưu.");
+            return;
+        }
+        const list = document.createElement("ol");
+        for (const entry of entries) {
+            const li = document.createElement("li");
+            const who = document.createElement("strong");
+            who.textContent = entry.name;
+            const value = document.createElement("span");
+            value.textContent = entry.score + " điểm · " + entry.nights_won + "/3 Đêm";
+            li.append(who, value);
+            list.append(li);
+        }
+        fields.leaderboard.replaceChildren(list);
+    } catch (error) {
+        setText(fields.leaderboard, error.message);
+    }
+}
+
+function allowScoreSave() {
+    fields["score-form"].hidden = false;
+    fields["score-form"].reset();
+    fields["score-form"].querySelector("button").disabled = false;
+    setText(fields["save-status"], "");
+}
+
+fields["score-form"].addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button");
+    button.disabled = true;
+    try {
+        await request("/api/leaderboard", {session, name: fields["player-name"].value});
+        setText(fields["save-status"], "Đã ghi nhận điểm. Bảng xếp hạng giữ 10 mục cao nhất.");
+    } catch (error) {
+        setText(fields["save-status"], error.message);
+        button.disabled = false;
+    }
+});
 
 function showIntro(targetNight) {
     night = targetNight;
@@ -602,24 +891,36 @@ function showIntro(targetNight) {
 }
 
 function showPause() {
+    const buttons = [["Tiếp tục", resume], ["Chơi lại Đêm", start], ["Cài đặt", () => showSettings("pause")]];
+    if (practice) buttons.push(["Đổi bản đồ", showMapSelect]);
+    buttons.push(["Về menu", showMenu]);
     overlay("pause", "Tạm dừng", "Đêm " + night + " · " + nights[night - 1].name,
-        [["Tiếp tục", resume], ["Chơi lại Đêm", start], ["Cài đặt", () => showSettings("pause")],
-            ["Về menu", showMenu]]);
+        buttons);
 }
 
 function showSettings(back) {
     settingsBack = back;
+    fields["key-settings"].open = false;
+    setText(fields["binding-status"], "");
     overlay("settings", "Cài đặt", "",
         [["Quay lại", () => settingsBack === "pause" ? showPause() : showMenu()]]);
 }
 
 function showEnd() {
     const {state, score} = snapshot;
+    if (practice) {
+        const result = state === "won" ? "Bạn đã giữ đủ đèn sáng tới bình minh." :
+            snapshot.player.flames === 0 ? "Ngọn lửa cuối đã tắt." : "Bình minh đến khi đảo còn thiếu đèn sáng.";
+        overlay("practice-result", state === "won" ? "Đảo đã sáng!" : "Đêm còn dài",
+            result + " Điểm luyện tập: " + score + ".",
+            [["Chơi lại Đêm", start], ["Đổi bản đồ", showMapSelect], ["Về menu", showMenu]], "LUYỆN TẬP");
+        return;
+    }
     if (state === "won") {
-        totalScore += score;
         if (night === 3) {
             overlay("dawn", "Bình Minh", "Cả ba hòn đảo đã sáng đèn. Tổng điểm: " + totalScore + ".",
                 [["Về menu", showMenu]], "ĐẢO ĐÃ SÁNG");
+            allowScoreSave();
         } else {
             overlay("result", "Đêm " + night + " đã sáng!", "Điểm Đêm: " + score + " · Tổng: " + totalScore,
                 [["Đêm kế tiếp", () => showIntro(night + 1)], ["Về menu", showMenu]]);
@@ -627,8 +928,9 @@ function showEnd() {
     } else {
         const reason = snapshot.player.flames === 0 ? "Ngọn lửa cuối đã tắt." :
             "Bình minh đến khi đảo còn thiếu đèn sáng.";
-        overlay("result", "Đêm còn dài", reason + " Điểm Đêm: " + score + ".",
+        overlay("result", "Đêm còn dài", reason + " Tổng điểm các Đêm đã thắng: " + totalScore + ".",
             [["Chơi lại Đêm", start], ["Về menu", showMenu]]);
+        allowScoreSave();
     }
 }
 
@@ -649,16 +951,19 @@ async function start() {
     busy = true;
     sound.unlock();
     try {
-        const result = await request("/api/start", {session, night});
+        const result = await request("/api/start", {session, night, practice});
         ({session, tuning, layout} = result);
         applyGameView(result);
         yaw = facing = 0;
+        spawnHints.clear();
         pulseAt = hitAt = -Infinity;
         previousSecond = Infinity;
-        setText(fields["night-label"], "ĐÊM " + night + " · " + nights[night - 1].name.toUpperCase());
+        setText(fields["night-label"], (practice ? "LUYỆN TẬP · " : "") +
+            "ĐÊM " + night + " · " + nights[night - 1].name.toUpperCase());
         activate();
     } catch (error) {
-        overlay("error", "Chưa vào được đảo", error.message, [["Thử lại", start], ["Về menu", showMenu]]);
+        overlay("error", "Chưa vào được đảo", error.message,
+            [["Thử lại", start], practice ? ["Đổi bản đồ", showMapSelect] : ["Về menu", showMenu]]);
     } finally {
         busy = false;
     }
@@ -682,8 +987,8 @@ async function resume() {
 }
 
 function movement() {
-    return [Number(keys.has("KeyD")) - Number(keys.has("KeyA")),
-        Number(keys.has("KeyW")) - Number(keys.has("KeyS"))];
+    const down = action => Number(bindings[action].some(code => keys.has(code)));
+    return [down("right") - down("left"), down("forward") - down("back")];
 }
 
 async function advance(ticks) {
@@ -691,8 +996,8 @@ async function advance(ticks) {
     const move = movement();
     if (move.some(Boolean)) facing = yaw + Math.atan2(move[0], move[1]);
     const controls = {move, cam_yaw_deg: yaw * 180 / Math.PI};
-    for (const [action, codes] of Object.entries(actions)) {
-        controls[action] = latched.delete(action) || codes.some(code => keys.has(code));
+    for (const action of actions) {
+        controls[action] = latched.delete(action) || bindings[action].some(code => keys.has(code));
     }
     try {
         const result = await request("/api/step", {session, ticks, controls});
@@ -741,14 +1046,30 @@ function animate(now) {
 }
 
 window.addEventListener("keydown", event => {
-    if (screen === "pause" && !event.repeat && actions.pause.includes(event.code)) {
+    if (screen === "settings" && editingBinding) {
+        if (event.repeat || !event.code || event.code === "Unidentified") return;
+        event.preventDefault();
+        const action = editingBinding;
+        const other = Object.keys(bindings).find(key => key !== action && bindings[key].includes(event.code));
+        if (other || cameraKeys.includes(event.code)) {
+            setText(fields["binding-status"], "Phím đã dùng cho " + (other ? labels[other] : "xoay camera") + ".");
+            return;
+        }
+        bindings[action] = [event.code];
+        editingBinding = null;
+        saveSettings();
+        bindingRows();
+        fields.bindings.querySelector('[aria-label="Đổi phím ' + labels[action] + '"]').focus();
+        setText(fields["binding-status"], "Đã đổi phím " + labels[action] + ".");
+    } else if (screen === "pause" && !event.repeat && bindings.pause.includes(event.code)) {
         event.preventDefault();
         resume();
-    } else if (running && bound.has(event.code)) {
+    } else if (running && (cameraKeys.includes(event.code) ||
+                            Object.values(bindings).some(codes => codes.includes(event.code)))) {
         event.preventDefault();
         keys.add(event.code);
         if (!event.repeat) {
-            for (const [action, codes] of Object.entries(actions)) if (codes.includes(event.code)) latched.add(action);
+            for (const action of actions) if (bindings[action].includes(event.code)) latched.add(action);
         }
     }
 });
@@ -766,5 +1087,53 @@ canvas.addEventListener("pointermove", event => {
     pointerX = event.clientX;
 });
 canvas.addEventListener("lostpointercapture", () => { pointerX = null; });
-showMenu();
-requestAnimationFrame(animate);
+async function runBenchmark() {
+    document.body.classList.add("benchmark-run");
+    try {
+        const response = await fetch("/api/bench-scene");
+        if (!response.ok) throw new Error("Không tải được cảnh benchmark");
+        const result = await response.json();
+        ({snapshot, tuning, layout} = result);
+        const duration = result.duration * 1000;
+        let start, previous, lastFetch = -Infinity, fetching = false;
+        const samples = [];
+        function frame(now) {
+            if (start === undefined) start = now;
+            const elapsed = now - start;
+            if (elapsed > 3000 + duration) {
+                request("/api/bench-result", {samples}).catch(showBenchError);
+                return;
+            }
+            const angle = elapsed * TAU / 15000;
+            yaw = Math.atan2(-Math.cos(angle), -Math.sin(angle));
+            draw(now, angle);
+            const rendered = performance.now();
+            if (previous >= start + 3000 && rendered <= start + 3000 + duration && rendered > previous)
+                samples.push(rendered - previous);
+            previous = rendered;
+            if (!elapsed) request("/api/bench-frame", {}).catch(showBenchError);
+            if (!fetching && elapsed > 0 && now - lastFetch >= STEP) {
+                fetching = true;
+                lastFetch = now;
+                fetch("/api/bench-motion").then(res => res.json()).then(positions => {
+                    positions.forEach((pos, i) => { snapshot.shades[i].pos = pos; });
+                }).catch(showBenchError).finally(() => { fetching = false; });
+            }
+            requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+    } catch (error) {
+        showBenchError(error);
+    }
+}
+
+function showBenchError(error) {
+    fields.benchmark.hidden = false;
+    setText(fields.benchmark, error.message);
+}
+
+if (benchMode) runBenchmark();
+else {
+    showMenu();
+    requestAnimationFrame(animate);
+}
