@@ -1,0 +1,26 @@
+:root { color-scheme: dark; font-family: "Avenir Next", system-ui, sans-serif; color: #fff5df; background: #111729; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+main, canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+.hud { position: absolute; inset: 22px 26px auto; display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; pointer-events: none; }
+.identity { display: grid; gap: 2px; text-shadow: 0 2px 12px #090e20; }
+.identity span { letter-spacing: .17em; font-size: .875rem; color: #ffdb91; font-weight: 700; }
+.identity strong { font-family: Georgia, serif; font-size: clamp(1.35rem, 3vw, 2rem); }
+.meters { display: flex; flex-wrap: wrap; gap: 2px; background: #161b31e8; border: 1px solid #e8bd7655; border-radius: 12px; padding: 8px 12px; }
+.meters div { min-width: 65px; padding: 2px 9px; display: grid; text-align: center; gap: 3px; }
+.meters span { color: #cfc4df; font-size: .875rem; }
+.meters strong { color: #ffdc97; font-variant-numeric: tabular-nums; }
+footer { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); gap: 8px 15px; padding: 10px 14px; border-radius: 10px; background: #151a30e6; color: #e9e3f4; font-size: .875rem; }
+kbd { background: #37354d; border: 1px solid #a490bc66; border-radius: 4px; padding: 1px 5px; color: #fff4dd; }
+#notice { position: absolute; bottom: 78px; left: 0; right: 0; margin: 0; text-align: center; font-weight: 700; text-shadow: 0 2px 8px #09101b, 0 0 13px #09101b; pointer-events: none; }
+#curtain { position: absolute; inset: 0; display: grid; place-items: center; background: #10102662; padding: 18px; }
+#curtain[hidden] { display: none; }
+.card { text-align: center; max-width: 470px; padding: 28px 32px 32px; background: #171a30f5; border: 1px solid #f1c47477; border-radius: 21px; box-shadow: 0 20px 80px #080b20b0; }
+.emblem { color: #ffce72; font-size: 2rem; text-shadow: 0 0 22px #ffaa4a; }
+h1 { margin: 4px 0 12px; font: 700 clamp(2rem, 6vw, 3rem)/1.04 Georgia, serif; }
+.card p { line-height: 1.6; color: #e0d4e8; margin: 0 0 24px; }
+button { border: 0; background: #ffd384; color: #282137; border-radius: 8px; font: inherit; font-weight: 750; padding: 11px 27px; cursor: pointer; }
+button:hover { background: #ffe3ad; }
+button:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+button:disabled { opacity: .6; cursor: wait; }
+@media (max-width: 740px) { .hud { inset: 12px 12px auto; flex-direction: column; } .meters div { min-width: 0; padding-inline: 5px; } }

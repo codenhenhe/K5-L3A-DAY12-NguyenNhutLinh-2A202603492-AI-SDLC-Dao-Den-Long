@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151c34">
+  <title>Đảo Đèn Lồng · Đêm 1</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="game.js" defer></script>
+</head>
+<body>
+  <main>
+    <canvas id="island" aria-label="Đảo Bến, khung cảnh 3D"></canvas>
+    <div class="hud">
+      <div class="identity"><span>ĐÊM 1 · ĐẢO BẾN</span><strong>Đảo Đèn Lồng</strong></div>
+      <div class="meters" aria-label="Thông tin trò chơi">
+        <div><span>Lửa</span><strong id="flames">—</strong></div>
+        <div><span>Đom đóm</span><strong id="motes">—</strong></div>
+        <div><span>Đèn sáng</span><strong id="lamps">—</strong></div>
+        <div><span>Thời gian</span><strong id="time">—</strong></div>
+        <div><span>Điểm</span><strong id="score">—</strong></div>
+      </div>
+    </div>
+    <p id="notice" role="status"></p>
+    <footer>
+      <span><kbd>WASD</kbd> Di chuyển</span>
+      <span><kbd>←</kbd> <kbd>→</kbd> Xoay</span>
+      <span><kbd>Space</kbd> Nhảy</span>
+      <span><kbd>E</kbd> Nạp đèn</span>
+      <span><kbd>F</kbd> Tỏa sáng</span>
+    </footer>
+    <section id="curtain" aria-labelledby="title">
+      <div class="card">
+        <div class="emblem" aria-hidden="true">✦</div>
+        <h1 id="title">Thắp lại Đảo Bến</h1>
+        <p id="description">Gom đom đóm để thắp năm Đèn Lồng Lớn. Ánh đèn sẽ giữ Bóng Mực ở xa.</p>
+        <button id="start" type="button">Bắt đầu</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
